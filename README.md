@@ -39,5 +39,3 @@ Intent hints in the captured text steer the model, e.g. `emoji happy`, `fix teh`
 ## Snippets
 
 JSON object of lowercase-ish keys → expansions. See `easify/snippets.example.json`.
-
-**Repo:** [github.com/shreyas-shrestha/easify](https://github.com/shreyas-shrestha/easify)
