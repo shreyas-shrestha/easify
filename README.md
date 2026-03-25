@@ -5,10 +5,10 @@ Global **AI-driven** text expansion: type a trigger (default `///`), your intent
 ## Install
 
 ```bash
-git clone https://github.com/<you>/easify.git
+git clone https://github.com/YOUR_USERNAME/easify.git
 cd easify
 pip install .
-# or: pip install git+https://github.com/<you>/easify.git
+# or: pip install git+https://github.com/YOUR_USERNAME/easify.git
 
 easify init    # optional: ~/.config/easify/snippets.json
 easify         # or: python -m easify
@@ -38,6 +38,22 @@ Intent hints in the captured text steer the model, e.g. `emoji happy`, `fix teh`
 ## Snippets
 
 JSON object of lowercase-ish keys → expansions. See `easify/snippets.example.json`.
+
+## Push to your own GitHub repo
+
+If this folder is already a git repo with a first commit:
+
+1. Create an empty repository named **easify** on GitHub (no README/license there).
+2. Add the remote and push:
+
+```bash
+cd /path/to/easify
+git remote add origin https://github.com/YOUR_USERNAME/easify.git
+git branch -M main
+git push -u origin main
+```
+
+Or with GitHub CLI: `gh repo create easify --public --source=. --remote=origin --push`
 
 ## License
 
