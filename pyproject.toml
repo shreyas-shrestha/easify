@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "easify"
+version = "0.2.0"
+description = "Global AI text expander via local Ollama (snippets, async, cross-platform)"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "Easify contributors" }]
+keywords = ["ollama", "expander", "keyboard", "ai", "pynput", "easify"]
+dependencies = [
+    "aiohttp>=3.9.0",
+    "keyboard>=0.13.5",
+    "pyperclip>=1.9.0",
+    "pynput>=1.7.6",
+]
+
+[project.scripts]
+easify = "easify.cli:main"
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[tool.setuptools.packages.find]
+include = ["easify*"]
+
+[tool.setuptools.package-data]
+easify = ["snippets.example.json"]
