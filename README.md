@@ -1,6 +1,7 @@
 # Easify
+supercharge writing with llm-based text expansion anywhere you want to write, and for anything you want to write. clarification, spell check, unit conversion, emojis, now happens automatically.
 
-Global **AI-driven** text expansion: type a trigger (default `///`), your intent, **Enter** → local **Ollama** returns plain text → pasted inline. JSON **snippets** resolve first (exact + optional fuzzy match).
+Type a trigger (default `///`), your intent, **Enter** → local **Ollama** returns plain text → pasted inline. JSON **snippets** resolve first (exact + optional fuzzy match). 
 
 ## Install
 
@@ -40,7 +41,3 @@ Intent hints in the captured text steer the model, e.g. `emoji happy`, `fix teh`
 JSON object of lowercase-ish keys → expansions. See `easify/snippets.example.json`.
 
 **Repo:** [github.com/shreyas-shrestha/easify](https://github.com/shreyas-shrestha/easify)
-
-## License
-
-MIT
