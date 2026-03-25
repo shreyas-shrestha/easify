@@ -1,5 +1,5 @@
 # Easify
-supercharge writing with llm-based text expansion anywhere you want to write, and for anything you want to write. clarification, spell check, unit conversion, emojis, now happens automatically.
+Supercharge writing with llm-based text expansion anywhere you want to write, and for anything you want to write. clarification, spell check, unit conversion, emojis, now happens automatically.
 
 Type a trigger (default `///`), your intent, **Enter** → local **Ollama** returns plain text → pasted inline. JSON **snippets** resolve first (exact + optional fuzzy match). 
 
