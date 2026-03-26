@@ -1,4 +1,7 @@
-"""Single cache façade — all reads/writes should migrate here (wraps SQLite store)."""
+"""Single cache façade — all reads/writes should migrate here (wraps SQLite store).
+
+Capture/live pipelines use :class:`CacheService` only; SQLite lives in :mod:`app.cache.store`.
+"""
 
 from __future__ import annotations
 

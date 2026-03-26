@@ -168,19 +168,10 @@ def main() -> None:
         from app.engine.router import EngineRouter
         from app.policy.policy import BehaviorPolicy
         from app.pipelines.deps import DefaultLivePipelineDeps
+        from app.pipelines.live_pipeline import build_live_pipeline_deps
 
         def _build_live_deps(policy: BehaviorPolicy) -> DefaultLivePipelineDeps:
-            return DefaultLivePipelineDeps(
-                autoc=service.autocorrect,
-                snippets=service.snippets,
-                cache=service.cache_service,
-                model=service.cache_model_id,
-                min_word_len=settings.live_min_word_len,
-                fuzzy_enabled=policy.live.fuzzy,
-                cache_enabled=policy.live.cache,
-                fuzzy_threshold=settings.live_fuzzy_threshold,
-                perf=settings.perf,
-            )
+            return build_live_pipeline_deps(service, settings, policy)
 
         router = EngineRouter(
             service=service,

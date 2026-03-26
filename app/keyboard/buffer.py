@@ -23,6 +23,16 @@ def live_phrase_completed(phrase: str) -> EngineEvent:
     return EngineEvent(EngineEventType.LIVE_PHRASE, LivePhrasePayload(phrase=phrase))
 
 
+def emit_live_word(word: str) -> EngineEvent:
+    """Buffer → engine: completed word token (alias for :func:`live_word_completed`)."""
+    return live_word_completed(word)
+
+
+def emit_live_phrase(phrase: str) -> EngineEvent:
+    """Buffer → engine: completed multi-word phrase."""
+    return live_phrase_completed(phrase)
+
+
 def compute_capture_submit_metadata(
     *,
     raw_buf: str,

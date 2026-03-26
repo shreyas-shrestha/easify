@@ -65,7 +65,7 @@ def test_listener_live_resolver_without_autocorrect_when_fuzzy_on(
         trigger=svc.settings.trigger,
         enter_backspaces=svc.settings.enter_backspaces,
     )
-    assert listener._live_resolver is not None
+    assert listener._live_capable()
 
 
 def test_listener_live_resolver_none_when_all_live_stages_off(
@@ -88,7 +88,7 @@ def test_listener_live_resolver_none_when_all_live_stages_off(
         trigger=svc.settings.trigger,
         enter_backspaces=svc.settings.enter_backspaces,
     )
-    assert listener._live_resolver is None
+    assert not listener._live_capable()
 
 
 def test_resolve_live_word_autocorrect_fuzzy(tmp_path: Path) -> None:

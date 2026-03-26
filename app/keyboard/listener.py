@@ -18,8 +18,13 @@ from app.context.focus import get_focused_app_name_fresh
 from app.engine.buffer import CaptureBuffer, TriggerState
 from app.keyboard import buffer as input_buffer
 from app.keyboard.capture_fsm import CaptureInputSession, CapturingKeyKind, PrefixTriggerResult
-from app.engine.guards import is_safe_phrase_tokens, is_safe_word, text_suggests_ime_mid_composition
-from app.engine.live_word import LiveFixCooldown, LiveWordResolver
+from app.engine.guards import text_suggests_ime_mid_composition
+from app.engine.live_word import LiveFixCooldown
+from app.pipelines.live_pipeline import (
+    legacy_live_replacement_phrase,
+    legacy_live_replacement_word,
+    maybe_schedule_live_enrich_after_miss,
+)
 from app.engine.service import ExpansionJob, ExpansionService
 from app.keyboard.keys import pynput_key_char, pynput_skip_key
 from app.utils import clipboard as cb
@@ -65,7 +70,6 @@ class KeyboardListener:
         )
         self._ctx_chars: list[str] = []
 
-        self._live_resolver: Optional[LiveWordResolver] = None
         self._live_chars: list[str] = []
         self._phrase_deque: Optional[deque[str]] = (
             deque(maxlen=settings.phrase_buffer_max) if settings.phrase_buffer_max > 0 else None
@@ -73,32 +77,20 @@ class KeyboardListener:
         self._live_cooldown = LiveFixCooldown(settings.live_cooldown_ms / 1000.0)
         self._live_replace_lock = threading.Lock()
         self._easify_engine: Optional["EasifyEngine"] = None
-        # Live «no //» path: word/phrase replace on Space. With EASIFY_ENGINE_V2, EasifyEngine handles resolution.
-        if settings.engine_v2:
-            self._live_resolver = None
-        elif (
-            settings.live_autocorrect
-            or settings.live_fuzzy
-            or settings.live_cache
-            or settings.live_cache_enrich
-            or settings.phrase_buffer_max > 0
-        ):
-            self._live_resolver = LiveWordResolver(
-                snippets=service.snippets,
-                autocorrect=service.autocorrect,
-                cache=service.cache_service,
-                model=service.cache_model_id,
-                min_word_len=settings.live_min_word_len,
-                fuzzy_enabled=settings.live_fuzzy,
-                cache_enabled=settings.live_cache,
-                fuzzy_threshold=settings.live_fuzzy_threshold,
-                perf=settings.perf,
-            )
 
     def _live_capable(self) -> bool:
         if self.settings.engine_v2 and self._easify_engine is not None:
             return True
-        return self._live_resolver is not None
+        return bool(
+            self.settings.live_autocorrect
+            or self.settings.live_fuzzy
+            or self.settings.live_cache
+            or self.settings.live_cache_enrich
+            or self.settings.phrase_buffer_max > 0
+        )
+
+    def _focused_app_for_live_policy(self) -> str:
+        return (get_focused_app_name_fresh() or "").strip()
 
     def _inject_depth_get(self) -> int:
         with self._inject_depth_lock:
@@ -190,29 +182,40 @@ class KeyboardListener:
                 self._phrase_deque.append(word)
                 if len(self._phrase_deque) >= 2:
                     phrase = " ".join(self._phrase_deque)
-                    replaced = self._easify_engine.handle_event(input_buffer.live_phrase_completed(phrase))
+                    replaced = self._easify_engine.handle_event(input_buffer.emit_live_phrase(phrase))
                     if replaced:
                         self._phrase_deque.clear()
                         self._live_cooldown.mark()
                         return
-            replaced = self._easify_engine.handle_event(input_buffer.live_word_completed(word))
+            replaced = self._easify_engine.handle_event(input_buffer.emit_live_word(word))
             if replaced:
                 if self._phrase_deque is not None:
                     self._phrase_deque.clear()
                 self._live_cooldown.mark()
             return
 
+        focused = self._focused_app_for_live_policy()
         if self._phrase_deque is not None:
             self._phrase_deque.append(word)
             if len(self._phrase_deque) >= 2:
                 phrase = " ".join(self._phrase_deque)
-                rep = self._live_resolver.resolve_phrase(phrase)
+                rep = legacy_live_replacement_phrase(
+                    phrase,
+                    service=self.service,
+                    settings=self.settings,
+                    focused_app_raw=focused,
+                )
                 if rep and rep != phrase:
                     self._perform_live_replace(phrase, rep)
                     self._phrase_deque.clear()
                     self._live_cooldown.mark()
                     return
-        rep = self._live_resolver.resolve(word)
+        rep = legacy_live_replacement_word(
+            word,
+            service=self.service,
+            settings=self.settings,
+            focused_app_raw=focused,
+        )
         if rep and rep != word:
             self._perform_live_replace(word, rep)
             if self._phrase_deque is not None:
@@ -220,14 +223,13 @@ class KeyboardListener:
             self._live_cooldown.mark()
             return
 
-        if self.settings.live_cache_enrich and self.settings.live_cache:
-            if self._phrase_deque is not None and len(self._phrase_deque) >= 2:
-                phrase = " ".join(self._phrase_deque)
-                toks = phrase.split()
-                if is_safe_phrase_tokens(toks, min_len=self.settings.live_min_word_len):
-                    self.service.schedule_live_cache_enrich_phrase(phrase)
-            elif is_safe_word(word, min_len=self.settings.live_min_word_len):
-                self.service.schedule_live_cache_enrich_word(word)
+        maybe_schedule_live_enrich_after_miss(
+            word,
+            self._phrase_deque,
+            service=self.service,
+            settings=self.settings,
+            min_word_len=self.settings.live_min_word_len,
+        )
 
     def _live_flush_context_only(self) -> None:
         """Update rolling / phrase buffers without live replace (expansion tail in flight)."""
