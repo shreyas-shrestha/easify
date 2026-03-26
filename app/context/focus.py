@@ -235,11 +235,32 @@ def inject_focus_safe_for_keys(*, captured_app: str, cmd_timeout: float = 1.25) 
             f"Cannot read the focused application (expected {cap!r}). "
             "Refusing inject so backspaces are not sent into the wrong window."
         )
-    c0, n0 = cap.lower(), now.lower()
-    if c0 == n0 or c0 in n0 or n0 in c0:
+    if _focus_names_compatible_for_inject(cap, now):
         return True, ""
     return (
         False,
         f"Wrong window is focused ({now!r}; capture was from {cap!r}). "
         "Inject cancelled (original app may have closed or refocus failed).",
     )
+
+
+def _focus_token_set(label: str) -> set[str]:
+    """Lowercased alphanumeric tokens; avoids false positives like 'Code' ⊂ 'Xcode'."""
+    return {t for t in re.findall(r"[a-z0-9]+", (label or "").lower()) if t}
+
+
+def _focus_names_compatible_for_inject(captured: str, focused_now: str) -> bool:
+    """True when capture-time and current frontmost labels are plausibly the same app."""
+    cap = (captured or "").strip()
+    now = (focused_now or "").strip()
+    if not cap or not now:
+        return True
+    c0, n0 = cap.lower(), now.lower()
+    if c0 == n0:
+        return True
+    tok_c, tok_n = _focus_token_set(cap), _focus_token_set(now)
+    if tok_c == tok_n:
+        return True
+    if tok_c and tok_n and (tok_c.issubset(tok_n) or tok_n.issubset(tok_c)):
+        return True
+    return False

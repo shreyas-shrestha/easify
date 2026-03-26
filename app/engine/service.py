@@ -632,6 +632,76 @@ class ExpansionService:
         to_inject = ""
         undo_restore = ""
         via_ax = False
+        planned_ax_darwin_main = False
+        tail = ""
+        n_tail = 0
+        synth_undo = ""
+        capture_span = ""
+
+        def _keystroke_inject_unlocked() -> None:
+            nonlocal injected_ok, to_inject, undo_restore, via_ax
+            undo_restore = synth_undo
+            via_ax = False
+            use_left = (
+                n_tail > 0
+                and self.settings.inject_tail_via_cursor_left
+                and self._cursor_left_fn is not None
+            )
+            if use_left:
+                to_inject = text
+                delete_count = job.delete_count
+                LOG.info(
+                    "inject layer=%s cursor_left=%s delete=%s (parallel tail preserved, not retyped)",
+                    layer,
+                    n_tail,
+                    delete_count,
+                )
+                self._cursor_left_fn(n_tail)
+                time.sleep(self.settings.after_delete_ms / 1000.0)
+            else:
+                if n_tail > 0 and self.settings.inject_tail_via_cursor_left and self._cursor_left_fn is None:
+                    LOG.warning(
+                        "inject: parallel tail but no cursor_left_fn — deleting through tail (legacy)"
+                    )
+                delete_count = job.delete_count + n_tail
+                to_inject = f"{text}{tail}"
+                LOG.info(
+                    "inject layer=%s delete=%s%s",
+                    layer,
+                    delete_count,
+                    f" (capture {job.delete_count} + tail {n_tail})" if tail else "",
+                )
+            self._delete_fn(delete_count)
+            time.sleep(self.settings.after_delete_ms / 1000.0)
+            if self._type_fn is not None and self.settings.inject_prefer_type:
+                try:
+                    self._type_fn(to_inject)
+                    injected_ok = True
+                except Exception as e:
+                    LOG.warning("type inject failed, using clipboard: %s", e)
+            if not injected_ok:
+                if self.settings.clipboard_restore:
+                    prev = cb.get_clipboard()
+                    try:
+                        cb.set_clipboard(to_inject)
+                        time.sleep(self.settings.paste_delay_ms / 1000.0)
+                        self._paste_fn(to_inject)
+                    finally:
+
+                        def _restore() -> None:
+                            time.sleep(0.35)
+                            try:
+                                cb.set_clipboard(prev)
+                            except Exception:
+                                pass
+
+                        threading.Thread(target=_restore, daemon=True).start()
+                else:
+                    cb.set_clipboard(to_inject)
+                    time.sleep(self.settings.paste_delay_ms / 1000.0)
+                    self._paste_fn(to_inject)
+                injected_ok = True
+
         with self._inject_lock:
             try:
                 from app.inject.accessibility import focused_field_appears_secure
@@ -658,84 +728,76 @@ class ExpansionService:
                 capture_span = job.undo_restore
 
                 if self.settings.inject_via_accessibility and capture_span:
-                    from app.inject.accessibility import replace_in_focused_field
-
-                    if replace_in_focused_field(
-                        old=capture_span,
-                        new=text,
-                        match_last=self.settings.inject_accessibility_match_last,
-                        unique_match_only=self.settings.inject_accessibility_unique_match_only,
-                    ):
-                        injected_ok = True
-                        to_inject = text
-                        undo_restore = capture_span
-                        via_ax = True
-                        LOG.info("inject layer=%s via=accessibility", layer)
-
-                if not injected_ok:
-                    undo_restore = synth_undo
-                    use_left = (
-                        n_tail > 0
-                        and self.settings.inject_tail_via_cursor_left
-                        and self._cursor_left_fn is not None
-                    )
-                    if use_left:
-                        to_inject = text
-                        delete_count = job.delete_count
-                        LOG.info(
-                            "inject layer=%s cursor_left=%s delete=%s (parallel tail preserved, not retyped)",
-                            layer,
-                            n_tail,
-                            delete_count,
-                        )
-                        self._cursor_left_fn(n_tail)
-                        time.sleep(self.settings.after_delete_ms / 1000.0)
+                    if platform.system() == "Darwin" and self._main_thread_runner is not None:
+                        planned_ax_darwin_main = True
                     else:
-                        if n_tail > 0 and self.settings.inject_tail_via_cursor_left and self._cursor_left_fn is None:
-                            LOG.warning(
-                                "inject: parallel tail but no cursor_left_fn — deleting through tail (legacy)"
-                            )
-                        delete_count = job.delete_count + n_tail
-                        to_inject = f"{text}{tail}"
-                        LOG.info(
-                            "inject layer=%s delete=%s%s",
-                            layer,
-                            delete_count,
-                            f" (capture {job.delete_count} + tail {n_tail})" if tail else "",
-                        )
-                    self._delete_fn(delete_count)
-                    time.sleep(self.settings.after_delete_ms / 1000.0)
-                    if self._type_fn is not None and self.settings.inject_prefer_type:
-                        try:
-                            self._type_fn(to_inject)
+                        from app.inject.accessibility import replace_in_focused_field
+
+                        if replace_in_focused_field(
+                            old=capture_span,
+                            new=text,
+                            match_last=self.settings.inject_accessibility_match_last,
+                            unique_match_only=self.settings.inject_accessibility_unique_match_only,
+                        ):
                             injected_ok = True
-                        except Exception as e:
-                            LOG.warning("type inject failed, using clipboard: %s", e)
-                    if not injected_ok:
-                        if self.settings.clipboard_restore:
-                            prev = cb.get_clipboard()
-                            try:
-                                cb.set_clipboard(to_inject)
-                                time.sleep(self.settings.paste_delay_ms / 1000.0)
-                                self._paste_fn(to_inject)
-                            finally:
+                            to_inject = text
+                            undo_restore = capture_span
+                            via_ax = True
+                            LOG.info("inject layer=%s via=accessibility", layer)
 
-                                def _restore() -> None:
-                                    time.sleep(0.35)
-                                    try:
-                                        cb.set_clipboard(prev)
-                                    except Exception:
-                                        pass
-
-                                threading.Thread(target=_restore, daemon=True).start()
-                        else:
-                            cb.set_clipboard(to_inject)
-                            time.sleep(self.settings.paste_delay_ms / 1000.0)
-                            self._paste_fn(to_inject)
-                        injected_ok = True
+                if not injected_ok and not planned_ax_darwin_main:
+                    _keystroke_inject_unlocked()
             finally:
-                if injected_ok and self.metrics is not None:
+                if injected_ok and self.metrics is not None and not planned_ax_darwin_main:
                     self.metrics.incr("capture_injections")
+
+        if planned_ax_darwin_main:
+            cap = capture_span
+            nv = text
+            from app.inject.accessibility import replace_in_focused_field
+
+            def do_ax_forward() -> bool:
+                with self._inject_lock:
+                    try:
+                        ok = replace_in_focused_field(
+                            old=cap,
+                            new=nv,
+                            match_last=self.settings.inject_accessibility_match_last,
+                            unique_match_only=self.settings.inject_accessibility_unique_match_only,
+                        )
+                        if ok:
+                            LOG.info("inject layer=%s via=accessibility", layer)
+                        return ok
+                    except Exception as e:
+                        LOG.warning("accessibility inject failed: %s", e)
+                        return False
+
+            outcome: list[Optional[bool]] = [None]
+            done = threading.Event()
+
+            def _on_main() -> None:
+                try:
+                    outcome[0] = do_ax_forward()
+                finally:
+                    done.set()
+
+            assert self._main_thread_runner is not None
+            self._main_thread_runner(_on_main)
+            if not done.wait(timeout=30.0):
+                LOG.warning("accessibility inject timed out waiting for main thread")
+            if outcome[0] is True:
+                if self.metrics is not None:
+                    self.metrics.incr("capture_injections")
+                self.set_undo_frame(nv, cap, via_accessibility=True)
+                return "accessibility"
+            with self._inject_lock:
+                try:
+                    injected_ok = False
+                    _keystroke_inject_unlocked()
+                finally:
+                    if injected_ok and self.metrics is not None:
+                        self.metrics.incr("capture_injections")
+
         if injected_ok:
             self.set_undo_frame(to_inject, undo_restore, via_accessibility=via_ax)
             return "accessibility" if via_ax else "keystroke"

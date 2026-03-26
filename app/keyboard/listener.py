@@ -67,6 +67,7 @@ class KeyboardListener:
             deque(maxlen=settings.phrase_buffer_max) if settings.phrase_buffer_max > 0 else None
         )
         self._live_cooldown = LiveFixCooldown(settings.live_cooldown_ms / 1000.0)
+        self._live_replace_lock = threading.Lock()
         # Live «no //» path: word/phrase replace on Space. Run whenever any stage or phrase buffer is enabled
         # (previously gated only on live_autocorrect, which broke fuzzy+snippet+cache with autocorrect off).
         if (
@@ -323,27 +324,35 @@ class KeyboardListener:
     def _perform_live_replace(self, old_word: str, new_text: str) -> None:
         if self._delete_n is None:
             return
-        from app.inject.accessibility import focused_field_appears_secure
-
-        if focused_field_appears_secure():
-            LOG.debug("live replace skipped: secure/password field")
-            return
         if text_suggests_ime_mid_composition(old_word):
             LOG.debug("live replace skipped: IME heuristic on token %r", old_word[:48])
             return
-        with self.service.inject_lock:
-            try:
-                self._delete_n(len(old_word) + 1)
-                time.sleep(self.settings.after_delete_ms / 1000.0)
-                with self._inject_depth_hold():
-                    try:
-                        self._type_text(new_text + " ")
-                        if self.service.metrics is not None:
-                            self.service.metrics.incr("live_replacements")
-                    except Exception as e:
-                        LOG.warning("live type failed: %s", e)
-            except Exception as e:
-                LOG.warning("live replace failed: %s", e)
+        parent = self
+        ow, nt = old_word, new_text
+
+        def _run() -> None:
+            from app.inject.accessibility import focused_field_appears_secure
+
+            if focused_field_appears_secure():
+                LOG.debug("live replace skipped: secure/password field")
+                return
+            with parent._live_replace_lock:
+                try:
+                    with parent.service.inject_lock:
+                        parent._delete_n(len(ow) + 1)
+                    time.sleep(parent.settings.after_delete_ms / 1000.0)
+                    with parent.service.inject_lock:
+                        with parent._inject_depth_hold():
+                            try:
+                                parent._type_text(nt + " ")
+                                if parent.service.metrics is not None:
+                                    parent.service.metrics.incr("live_replacements")
+                            except Exception as e:
+                                LOG.warning("live type failed: %s", e)
+                except Exception as e:
+                    LOG.warning("live replace failed: %s", e)
+
+        threading.Thread(target=_run, daemon=True, name="easify-live-replace").start()
 
     def _type_text(self, text: str) -> None:
         if self._ctrl is None:
