@@ -23,6 +23,7 @@ phrase_buffer_max = 0
 
 prewarm = false
 # startup_health = true
+# startup_health_timeout = 3
 perf = false
 inject_prefer_type = true
 metrics = false

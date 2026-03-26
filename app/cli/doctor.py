@@ -4,22 +4,12 @@ from __future__ import annotations
 
 import platform
 import sys
-from typing import Any, List
-from urllib.parse import urlparse, urlunparse
+from typing import List
 
-import httpx
-
+from app.cli.l3_probe import probe_l3_backend
 from app.config.settings import Settings, _config_dir
 
 Issue = tuple[str, str]  # level, message
-
-
-def ollama_tags_url(ollama_generate_url: str) -> str:
-    u = ollama_generate_url.strip()
-    if "/api/generate" in u:
-        return u.replace("/api/generate", "/api/tags")
-    p = urlparse(u)
-    return urlunparse((p.scheme or "http", p.netloc, "/api/tags", "", "", ""))
 
 
 def run_doctor(settings: Settings, *, strict: bool = False) -> int:
@@ -66,41 +56,36 @@ def run_doctor(settings: Settings, *, strict: bool = False) -> int:
     ok(f"AI provider = {prov}")
 
     if prov in ("openai", "gpt"):
-        if not (settings.openai_api_key or "").strip():
-            fail("OpenAI: EASIFY_OPENAI_API_KEY / OPENAI_API_KEY is empty")
-        else:
+        outcome = probe_l3_backend(settings, httpx_timeout=10.0)
+        for issue in outcome.issues:
+            if issue.level == "fail":
+                fail(issue.message)
+            else:
+                warn(issue.message)
+        if not outcome.issues:
             ok("OpenAI: API key set")
     elif prov in ("anthropic", "claude"):
-        if not (settings.anthropic_api_key or "").strip():
-            fail("Anthropic: EASIFY_ANTHROPIC_API_KEY / ANTHROPIC_API_KEY is empty")
-        else:
+        outcome = probe_l3_backend(settings, httpx_timeout=10.0)
+        for issue in outcome.issues:
+            if issue.level == "fail":
+                fail(issue.message)
+            else:
+                warn(issue.message)
+        if not outcome.issues:
             ok("Anthropic: API key set")
     else:
-        tags = ollama_tags_url(settings.ollama_url)
-        try:
-            with httpx.Client(timeout=5.0) as client:
-                r = client.get(tags)
-                if r.status_code != 200:
-                    fail(f"Ollama: GET {tags} → HTTP {r.status_code}")
-                else:
-                    ok(f"Ollama: reachable at {tags}")
-                    data: Any = r.json()
-                    names: list[str] = []
-                    for m in data.get("models") or []:
-                        if isinstance(m, dict) and m.get("name"):
-                            names.append(str(m["name"]))
-                    want = (settings.ollama_model or "").strip().lower()
-                    if want and not any(
-                        n.lower() == want or n.lower().startswith(want + ":") for n in names
-                    ):
-                        warn(
-                            f'Ollama: model "{settings.ollama_model}" not in tags '
-                            f'(pull with `ollama pull {settings.ollama_model}`)'
-                        )
-                    elif want:
-                        ok(f'Ollama: model "{settings.ollama_model}" present')
-        except httpx.HTTPError as e:
-            fail(f"Ollama: cannot reach {tags} ({e}) — is `ollama serve` running?")
+        outcome = probe_l3_backend(settings, httpx_timeout=10.0)
+        for issue in outcome.issues:
+            if issue.level == "fail":
+                fail(issue.message)
+            else:
+                warn(issue.message)
+        if outcome.ollama_reachable:
+            ok(f"Ollama: reachable at {outcome.ollama_tags_url}")
+            want = (settings.ollama_model or "").strip()
+            model_warned = any("not in tags" in i.message for i in outcome.issues if i.level == "warn")
+            if want and not model_warned:
+                ok(f'Ollama: model "{settings.ollama_model}" present')
 
     if settings.semantic_snippets:
         try:

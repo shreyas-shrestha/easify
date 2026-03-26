@@ -1,4 +1,4 @@
-from app.cli.doctor import ollama_tags_url
+from app.cli.l3_probe import ollama_tags_url
 
 
 def test_ollama_tags_url_default() -> None:
