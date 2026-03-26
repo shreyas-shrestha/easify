@@ -10,6 +10,21 @@ def test_ollama_tags_url_default() -> None:
     assert ollama_tags_url("http://127.0.0.1:11434/api/generate") == "http://127.0.0.1:11434/api/tags"
 
 
+def test_ollama_tags_url_proxy_preserves_prefix() -> None:
+    assert (
+        ollama_tags_url("http://proxy.internal/ollama/api/generate")
+        == "http://proxy.internal/ollama/api/tags"
+    )
+
+
+def test_ollama_tags_url_suffix_only_not_substring() -> None:
+    # Must not rewrite /api/generate in the middle of a longer segment.
+    assert (
+        ollama_tags_url("http://127.0.0.1:11434/api/generate/custom/custom")
+        == "http://127.0.0.1:11434/api/tags"
+    )
+
+
 def test_probe_openai_no_key(monkeypatch) -> None:
     monkeypatch.setenv("EASIFY_AI_PROVIDER", "openai")
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)

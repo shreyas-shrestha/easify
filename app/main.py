@@ -13,6 +13,7 @@ from pathlib import Path
 from app.config.settings import Settings, default_data_dir
 from app.engine.service import ExpansionService
 from app.keyboard.listener import KeyboardListener
+from app.ui.tray import TrayIconRef
 from app.utils.log import get_logger
 
 LOG = get_logger(__name__)
@@ -151,7 +152,7 @@ def main() -> None:
     start_snippet_reload_hook_server(service, settings, stop=stop)
 
     # macOS: pystray/AppKit requires menu-bar work on the main thread; SIGINT needs icon.stop().
-    tray_icon_ref: list = []
+    tray_icon_ref = TrayIconRef()
     hotkey_listener = None
 
     listener = KeyboardListener(
@@ -209,11 +210,7 @@ def main() -> None:
 
     def _shutdown_signal(*_: object) -> None:
         stop.set()
-        if tray_icon_ref:
-            try:
-                tray_icon_ref[0].stop()
-            except Exception:
-                pass
+        tray_icon_ref.stop()
 
     signal.signal(signal.SIGINT, _shutdown_signal)
     if hasattr(signal, "SIGTERM"):
@@ -248,14 +245,10 @@ def main() -> None:
         lt = threading.Thread(target=_listener_worker, daemon=True, name="easify-listener")
         lt.start()
         try:
-            run_tray_app(service, stop, _tray_stop, icon_holder=tray_icon_ref)
+            run_tray_app(service, stop, _tray_stop, icon_ref=tray_icon_ref)
         finally:
             stop.set()
-            if tray_icon_ref:
-                try:
-                    tray_icon_ref[0].stop()
-                except Exception:
-                    pass
+            tray_icon_ref.stop()
             lt.join(timeout=10.0)
             _cleanup_run()
         return

@@ -127,8 +127,7 @@ def _find_editable_value(elem: Optional[Any]) -> Tuple[Optional[Any], Optional[s
     return None, None
 
 
-def focused_element_is_password_field() -> bool:
-    """True if the focused control (or a short ancestor chain) is a secure/password text field."""
+def _focused_element_is_password_field_impl() -> bool:
     focused = _focused_element()
     if focused is None:
         return False
@@ -149,7 +148,16 @@ def focused_element_is_password_field() -> bool:
     return False
 
 
-def replace_substring_in_focused_element(
+def focused_element_is_password_field() -> bool:
+    """ImportError from missing pyobjc is contained here (not raised to accessibility.py)."""
+    try:
+        return _focused_element_is_password_field_impl()
+    except ImportError as e:
+        LOG.debug("AX password probe: ApplicationServices unavailable: %s", e)
+        return False
+
+
+def _replace_substring_in_focused_element_impl(
     old: str,
     new: str,
     *,
@@ -183,3 +191,20 @@ def replace_substring_in_focused_element(
         return False
     LOG.info("inject accessibility (AX) replaced len=%s → len=%s", len(old), len(new))
     return True
+
+
+def replace_substring_in_focused_element(
+    old: str,
+    new: str,
+    *,
+    match_last: bool = True,
+    unique_match_only: bool = True,
+) -> bool:
+    """ImportError from missing pyobjc is contained here (replace_in_focused_field expects bool)."""
+    try:
+        return _replace_substring_in_focused_element_impl(
+            old, new, match_last=match_last, unique_match_only=unique_match_only
+        )
+    except ImportError as e:
+        LOG.debug("AX inject: ApplicationServices unavailable: %s", e)
+        return False

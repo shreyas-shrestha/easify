@@ -56,26 +56,62 @@ EXPAND = (
     "Output ONLY the expanded text body—no preamble or quotes."
 )
 
-# "what is this song…" must NOT match—only quantity-style "what is 5 ft", "what is $10", etc.
-_RE_CONVERT_HINT = re.compile(
-    r"""
-    (?:
-      \b(?:convert|turn|change)\b
-      | \bwhat(?:'s|s|)\s+is\s+(?:\d|[\$€£])
-      | \b(?:how\s+(?:many|much|far))\b
-      | \d+\s*(?:km|mi|ft|lbs?|kg|g|oz|m|cm|mm|in|yd|
-                 mph|kph|celsius|fahrenheit|kelvin|
-                 litre|liter|gallon|pint|quart|cup|
-                 tbsp|tsp|acre|hectare|watt|volt|amp|
-                 byte|kb|mb|gb|tb)\b
-      | \b(?:to|into|in)\s+(?:km|mi|ft|lbs?|kg|g|oz|m|cm|mm|in|yd|
-                               mph|kph|celsius|fahrenheit|kelvin|
-                               metre|meter|litre|liter|gallon|pint|
-                               quart|byte|kilobyte|megabyte|gigabyte)\b
-    )
-    """,
-    re.IGNORECASE | re.VERBOSE,
+_RE_CONVERT_VERBS = re.compile(r"\b(?:convert|turn|change)\b", re.I)
+_RE_HOW_MANY = re.compile(r"\bhow\s+(?:many|much|far)\b", re.I)
+# Quantity + common unit token (not a full NLP model — explicit tokens reduce false positives).
+_RE_QUANTITY_WITH_UNIT = re.compile(
+    r"\d+(?:\.\d+)?\s*(?:km|mi|miles?|m\b|meters?|metres?|feet|foot|ft|inch|inches|in\b|yards?|yd|"
+    r"lbs?|kg|g|oz|grams?|cm|mm|mph|kph|"
+    r"celsius|fahrenheit|kelvin|"
+    r"litres?|liters?|gallons?|pints?|quarts?|cups?|tbsp|tsp|"
+    r"acres?|hectares?|watts?|volts?|amps?|bytes?|kb|mb|gb|tb)\b",
+    re.I,
 )
+_RE_TO_INTO_UNIT = re.compile(
+    r"\b(?:to|into|in)\s+(?:km|mi|ft|m\b|cm|mm|in\b|yd|kg|lb|lbs?|g|oz|"
+    r"mph|kph|celsius|fahrenheit|kelvin|metre|meter|litre|liter|gallon|pint|quart|byte|kilobyte|megabyte|gigabyte)\b",
+    re.I,
+)
+_RE_UNIT_WORD = re.compile(
+    r"\b(km|mi|miles?|meters?|metres?|feet|foot|ft|inch|inches|yd|yards?|"
+    r"kg|lb|lbs|grams?|g\b|oz|cm|mm|mph|kph|"
+    r"celsius|fahrenheit|pounds?|kilograms?|kilos?|liters?|litres?|gallons?|ounces?)\b",
+    re.I,
+)
+# "what is this song …", trivia, etc. — exclude before treating "what is …" as convert.
+_RE_WHAT_IS_EXCLUDE = re.compile(
+    r"\bwhat\s+(?:is|are|'s)\s+(?:"
+    r"this|that|the\s+(?:song|track|album|artist|band|movie|film|show|book)|"
+    r"a\s+(?:song|tune|band|artist|movie|show)|"
+    r"your\s+name"
+    r")\b",
+    re.I,
+)
+_RE_WHAT_IS_LEADING = re.compile(r"^\s*what\s+(?:is|are|'s)\s+", re.I)
+
+
+def _looks_like_convert_hint(low: str) -> bool:
+    """Heuristic CONVERT routing — readable rules instead of one brittle mega-regex."""
+    if _RE_CONVERT_VERBS.search(low) or _RE_HOW_MANY.search(low):
+        return True
+    if _RE_WHAT_IS_EXCLUDE.search(low):
+        return False
+    if _RE_QUANTITY_WITH_UNIT.search(low) or _RE_TO_INTO_UNIT.search(low):
+        return True
+    m = _RE_WHAT_IS_LEADING.search(low)
+    if m:
+        rest = low[m.end() :].strip()
+        if not rest:
+            return False
+        if re.match(r"^[\$€£]", rest):
+            return True
+        # "what is 5 ft …" — digit must start a quantity+unit span, not "1 direction…"
+        if _RE_QUANTITY_WITH_UNIT.match(rest):
+            return True
+        # "what is a pound in kilograms" — unit tokens + linker
+        if _RE_UNIT_WORD.search(rest) and re.search(r"\b(?:in|into|to)\b", rest):
+            return True
+    return False
 
 
 def sanitize_clipboard_context(raw: str, max_len: int) -> str:
@@ -133,7 +169,7 @@ def classify(capture: str) -> tuple[str, str]:
         return t, CODE
     if low.startswith("expand ") or low.startswith("draft ") or low.startswith("meeting ") or low.startswith("agenda "):
         return t, EXPAND
-    if _RE_CONVERT_HINT.search(low):
+    if _looks_like_convert_hint(low):
         return t, CONVERT
     if len(t.split()) <= 2 and not any(c in t for c in "/\\"):
         return t, DEFAULT

@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-from typing import Any
+from typing import Any, Protocol
 
 import httpx
 
@@ -14,6 +14,20 @@ from app.ai.ollama import OllamaClient
 from app.utils.log import get_logger
 
 LOG = get_logger(__name__)
+
+
+class ChatProvider(Protocol):
+    """Structural type for L3 backends (add providers without updating a Union)."""
+
+    @property
+    def name(self) -> str: ...
+
+    @property
+    def cache_model_id(self) -> str: ...
+
+    async def generate(self, client: httpx.AsyncClient, user: str, system: str) -> str: ...
+
+    async def ping(self, client: httpx.AsyncClient) -> bool: ...
 
 
 def _temperature() -> float:

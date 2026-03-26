@@ -3,6 +3,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import Enum
+
+
+class TrayAppStatus(str, Enum):
+    """Tray icon + snapshot lifecycle (avoid raw string typos)."""
+
+    IDLE = "idle"
+    THINKING = "thinking"
+    ERROR = "error"
 
 
 @dataclass
@@ -26,7 +35,7 @@ class UndoFrame:
 
 @dataclass(frozen=True)
 class TraySnapshot:
-    status: str
+    status: TrayAppStatus
     detail: str
     error: str
     model: str

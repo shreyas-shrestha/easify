@@ -9,9 +9,10 @@ from typing import TYPE_CHECKING, Optional
 import httpx
 
 from app.ai import prompts
+from app.ai.chat_provider import ChatProvider
 from app.autocorrect.engine import AutocorrectEngine
 from app.cache.store import SqliteExpansionCache
-from app.engine.expansion_contracts import CacheTouchHandler, ExpansionOutcome
+from app.engine.expansion_contracts import CacheTouchHandler, ExpansionLayer, ExpansionOutcome, l3_layer
 from app.engine.l0_compute import FxRateCache, try_l0_async
 from app.snippets.engine import SnippetEngine
 from app.snippets.template import expand_snippet_template
@@ -19,7 +20,6 @@ from app.utils import clipboard as cb
 from app.utils.log import get_logger
 
 if TYPE_CHECKING:
-    from app.ai.factory import ChatProvider
     from app.snippets.semantic_index import SnippetSemanticIndex
 
 LOG = get_logger(__name__)
@@ -36,7 +36,7 @@ class ExpansionPipeline:
         snippets: SnippetEngine,
         autocorrect: AutocorrectEngine,
         cache: SqliteExpansionCache,
-        llm: "ChatProvider",
+        llm: ChatProvider,
         fx_cache: FxRateCache,
         semantic_index: Optional["SnippetSemanticIndex"] = None,
         on_cache_touch: Optional[CacheTouchHandler] = None,
@@ -129,7 +129,7 @@ class ExpansionPipeline:
                 self._log_perf(stage_ms)
             if self._verbose:
                 LOG.info("L1 snippet exact (%s ms)", round(ms, 2))
-            return ExpansionOutcome(hit.value, "L1-snippet-exact", ms), corrected
+            return ExpansionOutcome(hit.value, ExpansionLayer.L1_SNIPPET_EXACT.value, ms), corrected
 
         t3 = time.perf_counter()
         hit = self.snippets.resolve_fuzzy(
@@ -142,7 +142,7 @@ class ExpansionPipeline:
                 self._log_perf(stage_ms)
             if self._verbose:
                 LOG.info("L2 snippet fuzzy score=%s (%s ms)", hit.score, round(ms, 2))
-            return ExpansionOutcome(hit.value, "L2-snippet-fuzzy", ms), corrected
+            return ExpansionOutcome(hit.value, ExpansionLayer.L2_SNIPPET_FUZZY.value, ms), corrected
 
         return None, corrected
 
@@ -204,7 +204,7 @@ class ExpansionPipeline:
             self._log_perf(stage_ms)
         if self._verbose:
             LOG.info("L2 snippet semantic score=%s (%s ms)", hit.score, round(ms, 2))
-        sem = ExpansionOutcome(hit.value, "L2-snippet-semantic", ms)
+        sem = ExpansionOutcome(hit.value, ExpansionLayer.L2_SNIPPET_SEMANTIC.value, ms)
         return await self._finalize_snippet_value_async(
             sem, focused_app=focused_app, clipboard_hint=clipboard_snippet
         )
@@ -233,7 +233,7 @@ class ExpansionPipeline:
         ms = (time.perf_counter() - t0) * 1000.0
         if self._verbose:
             LOG.info("L2 cache hit (contextual) (%s ms)", round(ms, 2))
-        return ExpansionOutcome(cached, "L2-cache", ms)
+        return ExpansionOutcome(cached, ExpansionLayer.L2_CACHE.value, ms)
 
     async def _expand_l3_generate(
         self,
@@ -259,7 +259,7 @@ class ExpansionPipeline:
         text = await self.llm.generate(http, user_prompt, system_full)
         if self._perf:
             LOG.info("L3 generate (ms): %s", round((time.perf_counter() - t_ai) * 1000.0, 3))
-        layer = f"L3-{self.llm.name}"
+        layer = l3_layer(self.llm.name)
         if text:
             self.cache.put(self.llm.cache_model_id, ck, text, source="ai")
         ms = (time.perf_counter() - t0) * 1000.0
@@ -295,7 +295,7 @@ class ExpansionPipeline:
                     self._log_perf(stage_ms)
                 if self._verbose:
                     LOG.info("L2 snippet semantic score=%s (%s ms)", hit.score, round(ms, 2))
-                sem = ExpansionOutcome(hit.value, "L2-snippet-semantic", ms)
+                sem = ExpansionOutcome(hit.value, ExpansionLayer.L2_SNIPPET_SEMANTIC.value, ms)
                 return self._finalize_snippet_value_sync(sem, focused_app=focused_app), stage_ms
         c = self._try_context_free_cache(corrected, t0, stage_ms)
         return c, stage_ms
@@ -311,7 +311,7 @@ class ExpansionPipeline:
     ) -> ExpansionOutcome:
         t0 = time.perf_counter()
         if not capture.strip():
-            return ExpansionOutcome("", "empty", (time.perf_counter() - t0) * 1000)
+            return ExpansionOutcome("", ExpansionLayer.EMPTY.value, (time.perf_counter() - t0) * 1000)
 
         l0 = await self._expand_l0(capture, http, t0)
         if l0 is not None:

@@ -1,10 +1,12 @@
 from app.engine.guards import is_safe_word, preserve_case, ratio_exceeds
 from app.engine.live_resolve import live_cache_prompt, resolve_live_phrase, resolve_live_word
 from app.engine.live_word import LiveFixCooldown, LiveWordResolver
+from app.engine.expansion_contracts import ExpansionLayer
 from app.engine.pipeline import ExpansionOutcome, ExpansionPipeline
 from app.engine.service import ExpansionService
 
 __all__ = [
+    "ExpansionLayer",
     "ExpansionPipeline",
     "ExpansionOutcome",
     "ExpansionService",

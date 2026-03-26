@@ -148,9 +148,25 @@ def test_classify_does_not_over_route_to_convert() -> None:
         "fix teh sentence",
         "draft weekly update",
         "what is this song that goes like thank you for the happiest time of my life",
+        "what is 1 direction's best song",
     ]:
         _, system = classify(query)
         assert system != CONVERT, f"should not be CONVERT for {query!r}"
+
+
+def test_classify_routes_phrase_unit_convert_to_convert() -> None:
+    from app.ai.prompts import CONVERT, classify
+
+    _, system = classify("what is a pound in kilograms")
+    assert system == CONVERT
+
+
+def test_sanitize_l0_input_preserves_superscript_not_nfkc_merge() -> None:
+    from app.engine.l0_compute import _sanitize_l0_input
+
+    assert "²" in _sanitize_l0_input("5²")
+    s = _sanitize_l0_input("１０ USD to EUR")
+    assert "10" in s and "USD" in s
 
 
 # ── FxRateCache asyncio.Lock (never hold across await with threading.Lock) ─

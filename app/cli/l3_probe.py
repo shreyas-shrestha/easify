@@ -10,13 +10,25 @@ import httpx
 
 from app.config.settings import Settings
 
+_GENERATE_SUFFIX = "/api/generate"
+
 
 def ollama_tags_url(ollama_generate_url: str) -> str:
-    u = ollama_generate_url.strip()
-    if "/api/generate" in u:
-        return u.replace("/api/generate", "/api/tags")
-    p = urlparse(u)
-    return urlunparse((p.scheme or "http", p.netloc, "/api/tags", "", "", ""))
+    """Map an Ollama ``/api/generate`` URL to ``/api/tags``, preserving path prefixes (reverse proxies)."""
+    p = urlparse(ollama_generate_url.strip())
+    scheme = p.scheme or "http"
+    netloc = p.netloc
+    path = p.path or "/"
+    path_core = path.rstrip("/") or "/"
+    if path_core.endswith(_GENERATE_SUFFIX):
+        base = path_core[: -len(_GENERATE_SUFFIX)]
+        new_path = f"{base}/api/tags" if base else "/api/tags"
+        if not new_path.startswith("/"):
+            new_path = "/" + new_path
+    else:
+        # Unknown layout (e.g. placeholder path): same behavior as before — tags at host root.
+        new_path = "/api/tags"
+    return urlunparse((scheme, netloc, new_path, "", "", ""))
 
 
 @dataclass(frozen=True)

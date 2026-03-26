@@ -4,27 +4,51 @@ from __future__ import annotations
 
 import threading
 import time
-from typing import TYPE_CHECKING, Callable, Optional
+from typing import TYPE_CHECKING, Any, Callable, Optional
 
+from app.engine.types import TrayAppStatus, TraySnapshot
 from app.utils.log import get_logger
 
 if TYPE_CHECKING:
-    from app.engine.service import ExpansionService, TraySnapshot
+    from app.engine.service import ExpansionService
 
 LOG = get_logger(__name__)
 
 _MAX_TOOLTIP_CHARS = 1800
 
 
-def _icon_image(state: str):
+class TrayIconRef:
+    """Thread-safe slot for the pystray Icon (tray thread sets; signal handler / shutdown reads)."""
+
+    __slots__ = ("_lock", "_icon")
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._icon: Any = None
+
+    def set_icon(self, icon: object) -> None:
+        with self._lock:
+            self._icon = icon
+
+    def stop(self) -> None:
+        with self._lock:
+            ic = self._icon
+        if ic is not None:
+            try:
+                ic.stop()
+            except Exception:
+                pass
+
+
+def _icon_image(state: TrayAppStatus):
     from PIL import Image, ImageDraw
 
     size = 64
     img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
-    if state == "thinking":
+    if state == TrayAppStatus.THINKING:
         fill = (80, 120, 255, 255)
-    elif state == "error":
+    elif state == TrayAppStatus.ERROR:
         fill = (220, 60, 60, 255)
     else:
         fill = (40, 180, 90, 255)
@@ -32,14 +56,14 @@ def _icon_image(state: str):
     return img
 
 
-def _format_tooltip(snap: "TraySnapshot", *, hint_after_s: float = 2.0) -> str:
+def _format_tooltip(snap: TraySnapshot, *, hint_after_s: float = 2.0) -> str:
     lines = [
-        f"Easify — {snap.status}",
+        f"Easify — {snap.status.value}",
         f"Model: {snap.model}",
         f"Queued: {snap.expansion_queued} expansion | {snap.enrich_queued} enrich",
         f"Undo stack: {snap.undo_depth}",
     ]
-    if snap.status == "thinking":
+    if snap.status == TrayAppStatus.THINKING:
         cap = (snap.thinking_capture or "").strip()
         lines.append(f"Intent: {cap[:180]}" if cap else "Resolving…")
         if snap.thinking_elapsed_s >= max(0.5, hint_after_s):
@@ -51,7 +75,7 @@ def _format_tooltip(snap: "TraySnapshot", *, hint_after_s: float = 2.0) -> str:
             lines.append(f"Elapsed {snap.thinking_elapsed_s:.1f}s…")
     if snap.degraded_hint:
         lines.append(f"Hint: {snap.degraded_hint[:500]}")
-    if snap.status == "error" and snap.detail:
+    if snap.status == TrayAppStatus.ERROR and snap.detail:
         lines.append(f"Summary: {snap.detail[:600]}")
     elif snap.detail:
         lines.append(f"Last expansion: {snap.detail[:600]}")
@@ -71,7 +95,7 @@ def run_tray_app(
     stop: threading.Event,
     on_quit: Callable[[], None],
     *,
-    icon_holder: Optional[list] = None,
+    icon_ref: Optional[TrayIconRef] = None,
 ) -> None:
     try:
         import pystray
@@ -104,13 +128,12 @@ def run_tray_app(
         Menu.SEPARATOR,
         MenuItem("Quit", _quit),
     )
-    icon = pystray.Icon("Easify", _icon_image("idle"), title="Easify", menu=menu)
-    if icon_holder is not None:
-        icon_holder.clear()
-        icon_holder.append(icon)
+    icon = pystray.Icon("Easify", _icon_image(TrayAppStatus.IDLE), title="Easify", menu=menu)
+    if icon_ref is not None:
+        icon_ref.set_icon(icon)
 
     def poll() -> None:
-        last_state = ""
+        last_state: Optional[TrayAppStatus] = None
         last_title = ""
         while not stop.is_set():
             snap = service.tray_snapshot()

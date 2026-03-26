@@ -7,7 +7,7 @@ import json
 import re
 import threading
 from pathlib import Path
-from typing import Any, Set
+from typing import Any, MutableMapping, Set
 
 from app.utils.log import get_logger
 
@@ -65,35 +65,42 @@ def count_promoted_snippets(inner: dict[Any, Any]) -> int:
     )
 
 
-def append_snippet_to_user_file(user_snippets: Path, key: str, value: str) -> bool:
-    """Merge key into JSON file. Returns True if a new key was written."""
-    user_snippets.parent.mkdir(parents=True, exist_ok=True)
-    raw_obj: object
-    if user_snippets.is_file():
-        try:
-            raw_obj = json.loads(user_snippets.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            raw_obj = {}
-    else:
-        raw_obj = {}
+def _load_snippets_inner(user_snippets: Path) -> MutableMapping[str, Any]:
+    """Single read of user snippets dict (values are snippet strings)."""
+    if not user_snippets.is_file():
+        return {}
+    try:
+        raw_obj = json.loads(user_snippets.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
     if isinstance(raw_obj, dict) and "snippets" in raw_obj:
         inner = raw_obj["snippets"]
-        if not isinstance(inner, dict):
-            inner = {}
-    elif isinstance(raw_obj, dict):
-        inner = raw_obj
-    else:
-        inner = {}
+        if isinstance(inner, dict):
+            return inner
+        return {}
+    if isinstance(raw_obj, dict):
+        return raw_obj
+    return {}
+
+
+def _atomic_write_snippets(user_snippets: Path, inner: MutableMapping[str, Any]) -> None:
+    out_doc: dict[str, object] = {"snippets": dict(inner)}
+    user_snippets.parent.mkdir(parents=True, exist_ok=True)
+    tmp = user_snippets.with_suffix(".tmp")
+    tmp.write_text(json.dumps(out_doc, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    tmp.replace(user_snippets)
+
+
+def append_snippet_to_user_file(user_snippets: Path, key: str, value: str) -> bool:
+    """Merge key into JSON file. Returns True if a new key was written."""
+    inner = _load_snippets_inner(user_snippets)
     kk = key.strip().lower()
     if not kk:
         return False
     if kk in inner and isinstance(inner[kk], str):
         return False
     inner[kk] = value
-    out_doc: dict[str, object] = {"snippets": inner}
-    tmp = user_snippets.with_suffix(".tmp")
-    tmp.write_text(json.dumps(out_doc, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    tmp.replace(user_snippets)
+    _atomic_write_snippets(user_snippets, inner)
     return True
 
 
@@ -118,33 +125,26 @@ def maybe_promote_cache_hit(
     key = promote_key_for_line(line)
     token = hashlib.sha256(f"{key}\x00{cache_prompt}\x00{response}".encode("utf-8")).hexdigest()
     dedupe = _dedupe_path(config_dir)
+    # Lock only coordinates concurrent promoters in this process; another process (snippet UI) may
+    # still race — we read once and write atomically to minimize the window.
     with _PROMOTE_LOCK:
-        if max_promoted_keys > 0:
-            raw_obj: object
-            if user_snippets.is_file():
-                try:
-                    raw_obj = json.loads(user_snippets.read_text(encoding="utf-8"))
-                except (OSError, json.JSONDecodeError):
-                    raw_obj = {}
-            else:
-                raw_obj = {}
-            if isinstance(raw_obj, dict) and "snippets" in raw_obj:
-                inner_prev = raw_obj["snippets"]
-            elif isinstance(raw_obj, dict):
-                inner_prev = raw_obj
-            else:
-                inner_prev = {}
-            if isinstance(inner_prev, dict) and count_promoted_snippets(inner_prev) >= max_promoted_keys:
-                LOG.warning(
-                    "cache promotion skipped: promoted snippet cap reached (%s)",
-                    max_promoted_keys,
-                )
-                return False
+        inner = _load_snippets_inner(user_snippets)
+        if max_promoted_keys > 0 and count_promoted_snippets(inner) >= max_promoted_keys:
+            LOG.warning(
+                "cache promotion skipped: promoted snippet cap reached (%s)",
+                max_promoted_keys,
+            )
+            return False
         seen = _load_promoted_set(dedupe)
         if token in seen:
             return False
-        if not append_snippet_to_user_file(user_snippets, key, response):
+        kk = key.strip().lower()
+        if not kk:
             return False
+        if kk in inner and isinstance(inner[kk], str):
+            return False
+        inner[kk] = response
+        _atomic_write_snippets(user_snippets, inner)
         _remember_promoted(dedupe, token)
     LOG.info("promoted cache hit → snippet %r (hits=%s source=%s)", key, hit_count, src)
     return True

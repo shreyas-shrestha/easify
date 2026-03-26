@@ -6,14 +6,14 @@ import threading
 import time
 
 from app.config.settings import Settings
-from app.engine.types import TraySnapshot
+from app.engine.types import TrayAppStatus, TraySnapshot
 
 
 class TrayController:
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
         self._lock = threading.Lock()
-        self._status = "idle"
+        self._status = TrayAppStatus.IDLE
         self._detail = ""
         self._last_success_detail = ""
         self._last_error = ""
@@ -23,7 +23,7 @@ class TrayController:
 
     def set_thinking(self, preview: str = "") -> None:
         with self._lock:
-            self._status = "thinking"
+            self._status = TrayAppStatus.THINKING
             self._detail = preview[:220]
             self._thinking_capture = preview[:220]
             self._thinking_started_mono = time.monotonic()
@@ -32,7 +32,7 @@ class TrayController:
 
     def set_idle(self, last_expansion: str = "") -> None:
         with self._lock:
-            self._status = "idle"
+            self._status = TrayAppStatus.IDLE
             self._detail = last_expansion[:220]
             self._last_success_detail = self._detail
             self._last_error = ""
@@ -42,7 +42,7 @@ class TrayController:
 
     def set_error(self, message: str, *, degraded_hint: str = "") -> None:
         with self._lock:
-            self._status = "error"
+            self._status = TrayAppStatus.ERROR
             self._last_error = (message or "")[:8000]
             self._detail = (message or "")[:500]
             self._degraded_hint = (degraded_hint or "")[:500]
@@ -51,9 +51,9 @@ class TrayController:
 
     def clear_error(self) -> None:
         with self._lock:
-            if self._status != "error":
+            if self._status != TrayAppStatus.ERROR:
                 return
-            self._status = "idle"
+            self._status = TrayAppStatus.IDLE
             self._last_error = ""
             self._degraded_hint = ""
             self._detail = self._last_success_detail
@@ -74,7 +74,7 @@ class TrayController:
             deg = self._degraded_hint
             t0 = self._thinking_started_mono
             cap_prev = self._thinking_capture
-        elapsed = (now - t0) if (st == "thinking" and t0 > 0) else 0.0
+        elapsed = (now - t0) if (st == TrayAppStatus.THINKING and t0 > 0) else 0.0
         return TraySnapshot(
             status=st,
             detail=det,

@@ -62,9 +62,9 @@ class Metrics:
     def _flush_unlocked(self) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         payload = {"counters": self._counts}
-        self._path.write_text(
-            json.dumps(payload, indent=2, sort_keys=True) + "\n",
-            encoding="utf-8",
-        )
+        text = json.dumps(payload, indent=2, sort_keys=True) + "\n"
+        tmp = self._path.with_suffix(self._path.suffix + ".tmp")
+        tmp.write_text(text, encoding="utf-8")
+        tmp.replace(self._path)
         self._last_flush = time.monotonic()
         self._dirty = False

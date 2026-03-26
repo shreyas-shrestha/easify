@@ -2,13 +2,9 @@
 
 from __future__ import annotations
 
-from typing import Union
-
-from app.ai.chat_provider import AnthropicChatProvider, OllamaChatProvider, OpenAIChatProvider
+from app.ai.chat_provider import AnthropicChatProvider, ChatProvider, OllamaChatProvider, OpenAIChatProvider
 from app.ai.ollama import OllamaClient
 from app.config.settings import Settings
-
-ChatProvider = Union[OllamaChatProvider, OpenAIChatProvider, AnthropicChatProvider]
 
 
 def build_chat_provider(settings: Settings) -> ChatProvider:

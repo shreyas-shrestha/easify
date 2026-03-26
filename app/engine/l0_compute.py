@@ -17,6 +17,7 @@ from typing import Any, Dict, Iterator, Optional, cast
 
 import httpx
 
+from app.engine.expansion_contracts import ExpansionLayer
 from app.utils.log import get_logger
 
 LOG = get_logger(__name__)
@@ -114,10 +115,19 @@ _CURRENCY_ALIASES: dict[str, str] = {
 
 
 def _sanitize_l0_input(s: str) -> str:
-    """Normalize Unicode so Notes/Web $ variants still match FX patterns."""
-    t = unicodedata.normalize("NFKC", s).strip()
-    t = t.replace("\uFF04", "$").replace("\uFE69", "$")
-    return t
+    """Normalize for L0: NFC preserves superscripts etc.; NFKC only for fullwidth compatibility chars."""
+    t = unicodedata.normalize("NFC", s).strip()
+    out: list[str] = []
+    for ch in t:
+        o = ord(ch)
+        # Fullwidth / halfwidth block and small dollar — map to ASCII for currency/units; skip NFKC on whole
+        # string so 5², scientific symbols, etc. are not mangled into "52" or "H".
+        if 0xFF00 <= o <= 0xFFEF or ch in ("\uFE69", "\uFF04"):
+            out.append(unicodedata.normalize("NFKC", ch))
+        else:
+            out.append(ch)
+    t = "".join(out)
+    return t.replace("\uFF04", "$").replace("\uFE69", "$")
 
 
 _RE_INLINE_CONV = re.compile(
@@ -466,19 +476,19 @@ async def try_l0_async(capture: str, http: httpx.AsyncClient, fx: FxRateCache) -
     for cand in _iter_l0_candidates(capture):
         u = try_units(cand)
         if u:
-            return u, "L0-units"
+            return u, ExpansionLayer.L0_UNITS.value
         m = try_math(cand)
         if m is not None:
-            return m, "L0-math"
+            return m, ExpansionLayer.L0_MATH.value
         d = try_date_arithmetic(cand)
         if d:
-            return d, "L0-date"
+            return d, ExpansionLayer.L0_DATE.value
         s_fx = _normalize_currency_aliases(cand)
         fxm = _RE_FX.match(s_fx)
         if fxm:
             out = await fx.convert(http, float(fxm.group("amt")), fxm.group("fc"), fxm.group("tc"))
             if out:
-                return out, "L0-currency"
+                return out, ExpansionLayer.L0_CURRENCY.value
             LOG.warning(
                 "L0 currency pattern matched %r but FX returned no rate (network or API issue); "
                 "falling through to later layers",
