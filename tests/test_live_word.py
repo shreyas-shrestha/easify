@@ -29,8 +29,9 @@ def test_autocorrect_fuzzy_near_miss(tmp_path: Path) -> None:
     ac_path = tmp_path / "ac.json"
     ac_path.write_text('{"corrections": {"arguement": "argument"}}', encoding="utf-8")
     ac = AutocorrectEngine(ac_path)
-    assert ac.lookup_word("arguemnt") is None
-    assert ac.lookup_word_fuzzy("arguemnt", score_cutoff=90) == "argument"
+    # Value-indexed fuzzy: typo must be close to canonical "argument", not to key "arguement".
+    assert ac.lookup_word("argumet") is None
+    assert ac.lookup_word_fuzzy("argumet", score_cutoff=90) == "argument"
 
 
 def test_live_resolve_dict(tmp_path: Path) -> None:
@@ -99,7 +100,7 @@ def test_resolve_live_word_autocorrect_fuzzy(tmp_path: Path) -> None:
     cache = SqliteExpansionCache(tmp_path / "c.db")
     assert (
         resolve_live_word(
-            "arguemnt",
+            "argumet",
             autocorrect=ac,
             snippets=sn,
             cache=cache,

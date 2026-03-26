@@ -13,7 +13,7 @@ import unicodedata
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, Optional, cast
+from typing import Any, Dict, Iterator, Optional, cast
 
 import httpx
 
@@ -192,27 +192,35 @@ def _normalize_currency_aliases(s: str) -> str:
     return f"{amt_str} {fc} to {tc}"
 
 
-def _l0_query_candidates(s: str) -> list[str]:
-    """Try conversions on full text and likely sub-phrases (prose + conversion in one line)."""
-    t = s.strip()
-    if not t:
-        return []
-    out: list[str] = []
-    seen: set[str] = set()
+def _iter_l0_candidates(s: str) -> Iterator[str]:
+    """Yield normalized strings to try L0 against: full text, maybe last line, maybe inline chunks.
 
-    def add(x: str) -> None:
-        x = x.strip()
-        if x and x not in seen:
-            seen.add(x)
-            out.append(x)
-
-    add(t)
-    lines = [ln.strip() for ln in t.splitlines() if ln.strip()]
+    Currency aliases normalized once on the full string; inline ``_RE_INLINE_CONV`` is run only if
+    it matches anywhere (avoids a second full scan when no conversion-like substring exists).
+    """
+    t0 = _normalize_currency_aliases(s.strip())
+    if not t0:
+        return
+    seen: set[str] = {t0}
+    yield t0
+    lines = [ln.strip() for ln in t0.splitlines() if ln.strip()]
     if lines:
-        add(lines[-1])
-    for m in _RE_INLINE_CONV.finditer(t):
-        add(m.group("chunk"))
-    return out
+        last = lines[-1]
+        if last not in seen:
+            seen.add(last)
+            yield last
+    if not _RE_INLINE_CONV.search(t0):
+        return
+    for m in _RE_INLINE_CONV.finditer(t0):
+        chunk = (m.group("chunk") or "").strip()
+        if chunk and chunk not in seen:
+            seen.add(chunk)
+            yield chunk
+
+
+def _l0_query_candidates(s: str) -> list[str]:
+    """List form for tests — same strings as :func:`_iter_l0_candidates`."""
+    return list(_iter_l0_candidates(s))
 _RE_DATE_ADD = re.compile(
     r"^\s*(?P<base>today|yesterday|tomorrow|\d{4}-\d{2}-\d{2})\s*\+\s*"
     r"(?P<n>\d+)\s+(?P<u>days?|weeks?|hours?)\s*$",
@@ -439,7 +447,7 @@ async def try_l0_async(capture: str, http: httpx.AsyncClient, fx: FxRateCache) -
     capture = _sanitize_l0_input(capture)
     if not capture:
         return None
-    for cand in _l0_query_candidates(capture):
+    for cand in _iter_l0_candidates(capture):
         u = try_units(cand)
         if u:
             return u, "L0-units"

@@ -12,7 +12,7 @@ from pynput.keyboard import Controller, Key, Listener
 
 from app.config.settings import Settings
 from app.context.focus import get_focused_app_name_fresh
-from app.engine.buffer import CaptureBuffer, CloseDelimiterMatcher, TriggerState
+from app.engine.buffer import CaptureBuffer, TriggerState
 from app.engine.guards import is_safe_phrase_tokens, is_safe_word, text_suggests_ime_mid_composition
 from app.engine.live_word import LiveFixCooldown, LiveWordResolver
 from app.engine.service import ExpansionJob, ExpansionService
@@ -54,7 +54,6 @@ class KeyboardListener:
         self._dbl_armed = False
         self._dbl_last_mono = 0.0
         self._listener_io_lock = threading.Lock()
-        self._close_matcher: Optional[CloseDelimiterMatcher] = None
         self._recent_chars: deque[str] = deque(maxlen=16)
 
         self._rolling_words: Optional[deque[str]] = (
@@ -236,9 +235,6 @@ class KeyboardListener:
 
     def _cancel_capture(self) -> None:
         """Exit capture mode without submitting (document unchanged beyond what user typed)."""
-        if self._close_matcher is not None:
-            self._close_matcher.reset()
-        self._close_matcher = None
         self._capture.clear()
         self._trigger.reset()
         self._capture_from_prefix = False
@@ -256,11 +252,11 @@ class KeyboardListener:
         return pre.endswith(("http:", "https:", "file:", "ftp:"))
 
     def _submit_capture(self, *, entered_with_newline: bool) -> None:
-        raw = self._capture.text()
+        raw_buf = self._capture.text()
+        close = self.settings.capture_close.strip()
+        had_close_suffix = bool(close and raw_buf.endswith(close))
+        raw = raw_buf[: -len(close)] if had_close_suffix else raw_buf
         run_prompt = raw.strip()
-        if self._close_matcher is not None:
-            self._close_matcher.reset()
-        self._close_matcher = None
         from_prefix = self._capture_from_prefix
         self._state = _STATE_IDLE
         self._capture.clear()
@@ -269,10 +265,12 @@ class KeyboardListener:
         if not run_prompt:
             LOG.warning("empty intent — type between delimiters or press Enter")
             return
-        close = self.settings.capture_close.strip()
         if from_prefix and self.settings.use_prefix_trigger and self.trigger:
             if close and not entered_with_newline:
                 dc = len(self.trigger) + len(raw) + len(close)
+                undo = f"{self.trigger}{raw}{close}"
+            elif close and entered_with_newline and had_close_suffix:
+                dc = len(self.trigger) + len(raw) + len(close) + max(0, self.enter_backspaces)
                 undo = f"{self.trigger}{raw}{close}"
             else:
                 dc = len(self.trigger) + len(raw) + max(0, self.enter_backspaces)
@@ -280,6 +278,9 @@ class KeyboardListener:
         else:
             if close and not entered_with_newline:
                 dc = len(raw) + len(close)
+                undo = f"{raw}{close}"
+            elif close and entered_with_newline and had_close_suffix:
+                dc = len(raw) + len(close) + max(0, self.enter_backspaces)
                 undo = f"{raw}{close}"
             else:
                 dc = len(raw) + max(0, self.enter_backspaces)
@@ -313,11 +314,6 @@ class KeyboardListener:
         self._capture.clear()
         self._trigger.reset()
         self._capture_from_prefix = False
-        self._close_matcher = (
-            CloseDelimiterMatcher(self.settings.capture_close)
-            if self.settings.capture_close.strip()
-            else None
-        )
         self._live_clear()
         self._dbl_armed = False
         if self.debug:
@@ -409,25 +405,17 @@ class KeyboardListener:
                     return
 
                 if ch == "\b":
-                    if self._close_matcher is not None and self._close_matcher.backspace():
-                        return
                     self._capture.backspace()
-                    return
-
-                if self._close_matcher is not None and ch is not None and ch != "\n":
-                    for ev in self._close_matcher.feed(ch):
-                        if ev[0] == "submit":
-                            self._submit_capture(entered_with_newline=False)
-                            return
-                        append_ch = ev[1]
-                        if append_ch is not None:
-                            self._capture.push(append_ch)
-                    if self.debug and len(self._capture.chars) <= 80:
-                        LOG.debug("capture %r", self._capture.text())
                     return
 
                 if ch is not None and ch != "\n":
                     self._capture.push(ch)
+                    close = self.settings.capture_close.strip()
+                    if close and self._capture.text().endswith(close):
+                        for _ in range(len(close)):
+                            self._capture.backspace()
+                        self._submit_capture(entered_with_newline=False)
+                        return
                     if self.debug and len(self._capture.chars) <= 80:
                         LOG.debug("capture %r", self._capture.text())
                 return
@@ -447,11 +435,6 @@ class KeyboardListener:
                         self._state = _STATE_CAPTURING
                         self._capture_from_prefix = True
                         self._capture.clear()
-                        self._close_matcher = (
-                            CloseDelimiterMatcher(self.settings.capture_close)
-                            if self.settings.capture_close.strip()
-                            else None
-                        )
                         self._live_clear()
                         return
                     if self._trigger.in_progress:
@@ -496,11 +479,6 @@ class KeyboardListener:
                     self._state = _STATE_CAPTURING
                     self._capture_from_prefix = True
                     self._capture.clear()
-                    self._close_matcher = (
-                        CloseDelimiterMatcher(self.settings.capture_close)
-                        if self.settings.capture_close.strip()
-                        else None
-                    )
                     self._live_clear()
                     return
                 if self._trigger.in_progress:

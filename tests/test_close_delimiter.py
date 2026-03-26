@@ -1,25 +1,23 @@
-"""Close-delimiter streaming matcher for inline capture."""
+"""Close delimiter: suffix detection on capture buffer (no streaming matcher)."""
 
 from __future__ import annotations
 
-from app.engine.buffer import CloseDelimiterMatcher
+from app.engine.buffer import CaptureBuffer, strip_trailing_close
 
 
-def test_close_matcher_emits_submit_on_full_delimiter() -> None:
-    m = CloseDelimiterMatcher("//")
-    assert m.feed("/") == []
-    assert m.feed("/") == [("submit", None)]
+def test_strip_trailing_close() -> None:
+    assert strip_trailing_close("hello//", "//") == "hello"
+    assert strip_trailing_close("hello", "//") == "hello"
 
 
-def test_close_matcher_flushes_partial_then_appends() -> None:
-    m = CloseDelimiterMatcher("//")
-    assert m.feed("/") == []
-    ev = m.feed("a")
-    assert ("append", "/") in ev and ("append", "a") in ev
-
-
-def test_close_matcher_backspace_on_pending() -> None:
-    m = CloseDelimiterMatcher("//")
-    m.feed("/")
-    assert m.backspace() is True
-    assert m.pending == ""
+def test_capture_suffix_submit_simulation() -> None:
+    """What the listener does: push chars; when text endswith close, pop close then submit body."""
+    buf = CaptureBuffer()
+    close = "//"
+    for ch in "hi//":
+        buf.push(ch)
+        if ch != "\n" and close and buf.text().endswith(close):
+            for _ in range(len(close)):
+                buf.backspace()
+            break
+    assert buf.text() == "hi"

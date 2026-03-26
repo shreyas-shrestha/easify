@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Optional
-
 from app.utils.log import get_logger
 
 LOG = get_logger(__name__)
@@ -19,7 +17,7 @@ class TriggerState:
         """True while a partial trigger prefix (e.g. `//`) is being typed."""
         return self.matched > 0
 
-    def try_advance(self, ch: Optional[str], trigger: str) -> bool:
+    def try_advance(self, ch: str | None, trigger: str) -> bool:
         """Returns True when trigger sequence completes."""
         if ch is None or not trigger:
             return False
@@ -43,43 +41,12 @@ class TriggerState:
         self.matched = 0
 
 
-@dataclass
-class CloseDelimiterMatcher:
-    """Match a closing delimiter in a stream without committing it to the capture buffer.
-
-    Not thread-safe; :class:`KeyboardListener` serializes all ``feed`` / ``backspace`` / ``reset``
-    calls via ``_listener_io_lock`` so pynput callbacks cannot interleave.
-    """
-
-    close: str
-    pending: str = ""
-
-    def feed(self, ch: str) -> list[tuple[str, Optional[str]]]:
-        """Events for one key: zero+ ('append', char) or one ('submit', None) at end of delimiter."""
-        out: list[tuple[str, Optional[str]]] = []
-        self.pending += ch
-        while True:
-            if not self.pending:
-                return out
-            if self.close.startswith(self.pending):
-                if len(self.pending) == len(self.close):
-                    self.pending = ""
-                    out.append(("submit", None))
-                    return out
-                return out
-            c0 = self.pending[0]
-            self.pending = self.pending[1:]
-            out.append(("append", c0))
-
-    def backspace(self) -> bool:
-        """Shrink pending partial delimiter; return True if we handled it (did not touch capture)."""
-        if self.pending:
-            self.pending = self.pending[:-1]
-            return True
-        return False
-
-    def reset(self) -> None:
-        self.pending = ""
+def strip_trailing_close(raw: str, close: str) -> str:
+    """If ``raw`` ends with ``close``, return the prefix; otherwise ``raw``."""
+    c = (close or "").strip()
+    if c and raw.endswith(c):
+        return raw[: -len(c)]
+    return raw
 
 
 @dataclass

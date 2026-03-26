@@ -192,7 +192,7 @@ Intent hints: `emoji happy`, `fix teh`, `convert 5 ft to meters` (see `app/ai/pr
   - `{focused_app}` or `{app}` — foreground app label when available
   - `{cursor_position}` — always empty (caret index not available from the listener)
   - `{input:prompt}` or `{prompt:…}` — **capture / palette path only:** opens a small **tkinter** dialog (`asyncio.to_thread`); **omitted on live word** replace (empty string) so Space-boundary fixes stay non-blocking
-- **Autocorrect:** `data/autocorrect.json` or `~/.config/easify/autocorrect.json` with `{ "corrections": { "teh": "the", ... } }`. Applied to the captured phrase **before** snippet/LLM resolution. Fuzzy typos are resolved **once per distinct token shape** in a phrase (repeated identical words share one `rapidfuzz` lookup), so L1 work scales with **unique** unknown cores, not raw token count.
+- **Autocorrect:** `data/autocorrect.json` or `~/.config/easify/autocorrect.json` with `{ "corrections": { "teh": "the", ... } }`. Applied to the captured phrase **before** snippet/LLM resolution. **Fuzzy** near-misses use `rapidfuzz` against **canonical values** (correct words), not against typo keys. Fuzzy runs **once per distinct token** in a phrase (repeated words share one lookup).
 
 ## Live word buffer (SPACE-boundary)
 

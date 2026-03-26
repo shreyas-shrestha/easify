@@ -22,13 +22,15 @@ class AutocorrectEngine:
     def __init__(self, path: Optional[Path]) -> None:
         self._path = path
         self._dict: dict[str, str] = {}
-        self._keys_tuple: tuple[str, ...] = ()
+        self._value_canon: dict[str, str] = {}
+        self._values_tuple: tuple[str, ...] = ()
         if path and path.is_file():
             self.reload()
 
     def reload(self) -> None:
         self._dict = {}
-        self._keys_tuple = ()
+        self._value_canon = {}
+        self._values_tuple = ()
         if not self._path or not self._path.is_file():
             return
         try:
@@ -42,7 +44,11 @@ class AutocorrectEngine:
         for k, v in raw.items():
             if isinstance(k, str) and isinstance(v, str):
                 self._dict[k.lower()] = v
-        self._keys_tuple = tuple(self._dict.keys())
+        for v in self._dict.values():
+            vl = v.lower().strip()
+            if vl and vl not in self._value_canon:
+                self._value_canon[vl] = v.strip()
+        self._values_tuple = tuple(sorted(self._value_canon.keys()))
 
     def lookup_word(self, word: str) -> Optional[str]:
         if not word:
@@ -50,25 +56,26 @@ class AutocorrectEngine:
         return self._dict.get(word.lower())
 
     def lookup_word_fuzzy(self, word: str, *, score_cutoff: int = 92) -> Optional[str]:
-        """Map typo → correction when :func:`rapidfuzz.fuzz.ratio` to some dict key ≥ cutoff."""
+        """Map near-miss → canonical word via :func:`rapidfuzz.fuzz.ratio` on **values** (correct words)."""
         if not word or not self._dict:
             return None
         wl = word.lower()
         if wl in self._dict:
             return self._dict[wl]
-        keys = self._keys_tuple
-        if not keys:
+        if wl in self._value_canon:
+            return self._value_canon[wl]
+        if not self._values_tuple:
             return None
         try:
             from rapidfuzz import fuzz, process
         except ImportError:
             return None
         lo = min(100, max(50, int(score_cutoff)))
-        m = process.extractOne(wl, keys, scorer=fuzz.ratio, score_cutoff=lo)
+        m = process.extractOne(wl, self._values_tuple, scorer=fuzz.ratio, score_cutoff=lo)
         if m is None:
             return None
-        key, _score, _idx = m
-        return self._dict.get(key)
+        vk, _score, _idx = m
+        return self._value_canon.get(vk)
 
     def apply_to_phrase(self, phrase: str) -> str:
         """Layer-1 token fix for capture text (preserves spacing style roughly).
