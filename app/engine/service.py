@@ -45,6 +45,8 @@ class ExpansionJob:
 class UndoFrame:
     injected: str
     restore: str
+    # True when expansion used OS accessibility string swap (undo uses same path).
+    via_accessibility: bool = False
 
 
 @dataclass(frozen=True)
@@ -174,17 +176,35 @@ class ExpansionService:
         ):
             self.snippets.reload()
 
-    def set_undo_frame(self, injected: str, restore: str) -> None:
+    def set_undo_frame(self, injected: str, restore: str, *, via_accessibility: bool = False) -> None:
         if not injected:
             return
         with self._undo_lock:
-            self._undo = UndoFrame(injected=injected, restore=restore.strip())
+            self._undo = UndoFrame(
+                injected=injected,
+                restore=restore,
+                via_accessibility=via_accessibility,
+            )
 
     def try_undo(self) -> bool:
         with self._undo_lock:
             frame = self._undo
             self._undo = None
-        if frame is None or self._delete_fn is None:
+        if frame is None:
+            return False
+        if frame.via_accessibility:
+            from app.inject.accessibility import replace_in_focused_field
+
+            with self._inject_lock:
+                try:
+                    ok = replace_in_focused_field(old=frame.injected, new=frame.restore or "")
+                    if ok and self.metrics is not None:
+                        self.metrics.incr("undo_expansions")
+                    return ok
+                except Exception as e:
+                    LOG.warning("accessibility undo failed: %s", e)
+                    return False
+        if self._delete_fn is None:
             return False
         with self._inject_lock:
             try:
@@ -487,77 +507,92 @@ class ExpansionService:
         injected_ok = False
         to_inject = ""
         undo_restore = ""
+        via_ax = False
         with self._inject_lock:
             try:
                 if self.settings.pre_inject_refocus:
                     refocus_if_needed_for_inject(captured_app=job.focused_app_at_submit)
                 tail = self._pop_tail_for_job(job)
                 n_tail = len(tail)
-                undo_restore = f"{job.undo_restore}{tail}"
-                use_left = (
-                    n_tail > 0
-                    and self.settings.inject_tail_via_cursor_left
-                    and self._cursor_left_fn is not None
-                )
-                if use_left:
-                    to_inject = text
-                    delete_count = job.delete_count
-                    LOG.info(
-                        "inject layer=%s cursor_left=%s delete=%s (parallel tail preserved, not retyped)",
-                        layer,
-                        n_tail,
-                        delete_count,
-                    )
-                    self._cursor_left_fn(n_tail)
-                    time.sleep(self.settings.after_delete_ms / 1000.0)
-                else:
-                    if n_tail > 0 and self.settings.inject_tail_via_cursor_left and self._cursor_left_fn is None:
-                        LOG.warning(
-                            "inject: parallel tail but no cursor_left_fn — deleting through tail (legacy)"
-                        )
-                    delete_count = job.delete_count + n_tail
-                    to_inject = f"{text}{tail}"
-                    LOG.info(
-                        "inject layer=%s delete=%s%s",
-                        layer,
-                        delete_count,
-                        f" (capture {job.delete_count} + tail {n_tail})" if tail else "",
-                    )
-                self._delete_fn(delete_count)
-                time.sleep(self.settings.after_delete_ms / 1000.0)
-                if self._type_fn is not None and self.settings.inject_prefer_type:
-                    try:
-                        self._type_fn(to_inject)
+                synth_undo = f"{job.undo_restore}{tail}"
+                capture_span = job.undo_restore
+
+                if self.settings.inject_via_accessibility and capture_span:
+                    from app.inject.accessibility import replace_in_focused_field
+
+                    if replace_in_focused_field(old=capture_span, new=text):
                         injected_ok = True
-                    except Exception as e:
-                        LOG.warning("type inject failed, using clipboard: %s", e)
+                        to_inject = text
+                        undo_restore = capture_span
+                        via_ax = True
+                        LOG.info("inject layer=%s via=accessibility", layer)
+
                 if not injected_ok:
-                    if self.settings.clipboard_restore:
-                        prev = cb.get_clipboard()
+                    undo_restore = synth_undo
+                    use_left = (
+                        n_tail > 0
+                        and self.settings.inject_tail_via_cursor_left
+                        and self._cursor_left_fn is not None
+                    )
+                    if use_left:
+                        to_inject = text
+                        delete_count = job.delete_count
+                        LOG.info(
+                            "inject layer=%s cursor_left=%s delete=%s (parallel tail preserved, not retyped)",
+                            layer,
+                            n_tail,
+                            delete_count,
+                        )
+                        self._cursor_left_fn(n_tail)
+                        time.sleep(self.settings.after_delete_ms / 1000.0)
+                    else:
+                        if n_tail > 0 and self.settings.inject_tail_via_cursor_left and self._cursor_left_fn is None:
+                            LOG.warning(
+                                "inject: parallel tail but no cursor_left_fn — deleting through tail (legacy)"
+                            )
+                        delete_count = job.delete_count + n_tail
+                        to_inject = f"{text}{tail}"
+                        LOG.info(
+                            "inject layer=%s delete=%s%s",
+                            layer,
+                            delete_count,
+                            f" (capture {job.delete_count} + tail {n_tail})" if tail else "",
+                        )
+                    self._delete_fn(delete_count)
+                    time.sleep(self.settings.after_delete_ms / 1000.0)
+                    if self._type_fn is not None and self.settings.inject_prefer_type:
                         try:
+                            self._type_fn(to_inject)
+                            injected_ok = True
+                        except Exception as e:
+                            LOG.warning("type inject failed, using clipboard: %s", e)
+                    if not injected_ok:
+                        if self.settings.clipboard_restore:
+                            prev = cb.get_clipboard()
+                            try:
+                                cb.set_clipboard(to_inject)
+                                time.sleep(self.settings.paste_delay_ms / 1000.0)
+                                self._paste_fn(to_inject)
+                            finally:
+
+                                def _restore() -> None:
+                                    time.sleep(0.35)
+                                    try:
+                                        cb.set_clipboard(prev)
+                                    except Exception:
+                                        pass
+
+                                threading.Thread(target=_restore, daemon=True).start()
+                        else:
                             cb.set_clipboard(to_inject)
                             time.sleep(self.settings.paste_delay_ms / 1000.0)
                             self._paste_fn(to_inject)
-                        finally:
-
-                            def _restore() -> None:
-                                time.sleep(0.35)
-                                try:
-                                    cb.set_clipboard(prev)
-                                except Exception:
-                                    pass
-
-                            threading.Thread(target=_restore, daemon=True).start()
-                    else:
-                        cb.set_clipboard(to_inject)
-                        time.sleep(self.settings.paste_delay_ms / 1000.0)
-                        self._paste_fn(to_inject)
-                    injected_ok = True
+                        injected_ok = True
             finally:
                 if injected_ok and self.metrics is not None:
                     self.metrics.incr("capture_injections")
         if injected_ok:
-            self.set_undo_frame(to_inject, undo_restore)
+            self.set_undo_frame(to_inject, undo_restore, via_accessibility=via_ax)
 
     def preload_cache_metadata(self) -> None:
         """Log cache stats + optional warmup file listing (no automatic LLM fan-out)."""

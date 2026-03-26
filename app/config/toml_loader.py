@@ -210,6 +210,11 @@ def apply_toml_to_settings(obj: Any, data: Mapping[str, Any]) -> None:
         "EASIFY_INJECT_TAIL_CURSOR_LEFT",
         key="inject_tail_via_cursor_left",
     )
+    take_bool(
+        "inject_via_accessibility",
+        "EASIFY_INJECT_ACCESSIBILITY",
+        key="inject_via_accessibility",
+    )
 
     take_bool("semantic_snippets", "EASIFY_SEMANTIC_SNIPPETS", key="semantic_snippets")
     take_str("semantic_model", "EASIFY_SEMANTIC_MODEL", key="semantic_model")

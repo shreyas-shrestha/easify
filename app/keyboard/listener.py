@@ -64,7 +64,15 @@ class KeyboardListener:
             deque(maxlen=settings.phrase_buffer_max) if settings.phrase_buffer_max > 0 else None
         )
         self._live_cooldown = LiveFixCooldown(settings.live_cooldown_ms / 1000.0)
-        if settings.live_autocorrect:
+        # Live «no //» path: word/phrase replace on Space. Run whenever any stage or phrase buffer is enabled
+        # (previously gated only on live_autocorrect, which broke fuzzy+snippet+cache with autocorrect off).
+        if (
+            settings.live_autocorrect
+            or settings.live_fuzzy
+            or settings.live_cache
+            or settings.live_cache_enrich
+            or settings.phrase_buffer_max > 0
+        ):
             self._live_resolver = LiveWordResolver(
                 snippets=service.snippets,
                 autocorrect=service.autocorrect,

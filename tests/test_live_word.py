@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from app.autocorrect.engine import AutocorrectEngine
 from app.cache.store import SqliteExpansionCache
 from app.engine.live_resolve import live_cache_prompt, resolve_live_word
@@ -33,6 +35,50 @@ def test_live_resolve_dict(tmp_path: Path) -> None:
     cache = SqliteExpansionCache(tmp_path / "c.db")
     r = LiveWordResolver(sn, ac, cache, "m", fuzzy_threshold=92)
     assert r.resolve("teh") == "the"
+
+
+def test_listener_live_resolver_without_autocorrect_when_fuzzy_on(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("EASIFY_TRAY", "0")
+    monkeypatch.setenv("EASIFY_LIVE_AUTOCORRECT", "0")
+    monkeypatch.setenv("EASIFY_LIVE_FUZZY", "1")
+    monkeypatch.setenv("EASIFY_LIVE_CACHE", "0")
+    from app.config.settings import Settings
+    from app.engine.service import ExpansionService
+    from app.keyboard.listener import KeyboardListener
+
+    svc = ExpansionService(Settings.load())
+    listener = KeyboardListener(
+        service=svc,
+        settings=svc.settings,
+        trigger=svc.settings.trigger,
+        enter_backspaces=svc.settings.enter_backspaces,
+    )
+    assert listener._live_resolver is not None
+
+
+def test_listener_live_resolver_none_when_all_live_stages_off(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("EASIFY_TRAY", "0")
+    monkeypatch.setenv("EASIFY_LIVE_AUTOCORRECT", "0")
+    monkeypatch.setenv("EASIFY_LIVE_FUZZY", "0")
+    monkeypatch.setenv("EASIFY_LIVE_CACHE", "0")
+    monkeypatch.setenv("EASIFY_LIVE_CACHE_ENRICH", "0")
+    monkeypatch.setenv("EASIFY_PHRASE_BUFFER_MAX", "0")
+    from app.config.settings import Settings
+    from app.engine.service import ExpansionService
+    from app.keyboard.listener import KeyboardListener
+
+    svc = ExpansionService(Settings.load())
+    listener = KeyboardListener(
+        service=svc,
+        settings=svc.settings,
+        trigger=svc.settings.trigger,
+        enter_backspaces=svc.settings.enter_backspaces,
+    )
+    assert listener._live_resolver is None
 
 
 def test_resolve_cache_without_fuzzy(tmp_path: Path) -> None:

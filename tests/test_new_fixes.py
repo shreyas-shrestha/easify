@@ -391,6 +391,52 @@ def test_inject_tail_settle_waits_for_quiet(monkeypatch: pytest.MonkeyPatch) -> 
         assert pe.tail == ["x"]
 
 
+def test_accessibility_inject_skips_synthetic_keys(monkeypatch: pytest.MonkeyPatch) -> None:
+    """When AX path succeeds, no delete_fn / type_fn runs."""
+    monkeypatch.setenv("EASIFY_TRAY", "0")
+    monkeypatch.setenv("EASIFY_INJECT_SETTLE_MS", "0")
+    monkeypatch.setenv("EASIFY_INJECT_ACCESSIBILITY", "1")
+    import app.inject.accessibility as acc
+
+    from app.config.settings import Settings
+    from app.engine.service import ExpansionJob, ExpansionService, _PendingExpansionTail
+
+    calls: list[tuple[str, str]] = []
+
+    def fake_replace(*, old: str, new: str) -> bool:
+        calls.append((old, new))
+        return True
+
+    monkeypatch.setattr(acc, "replace_in_focused_field", fake_replace)
+
+    svc = ExpansionService(Settings.load())
+    deleted: list[int] = []
+    typed: list[str] = []
+
+    svc.set_inject(
+        lambda n: deleted.append(n),
+        lambda t: typed.append(t),
+        type_fn=lambda s: typed.append(s),
+        cursor_left_fn=lambda n: None,
+    )
+    job = ExpansionJob(capture="c", delete_count=10, undo_restore="//c//")
+    svc._pending_tails.append(_PendingExpansionTail(job=job))
+    with svc._pending_tails[0].lock:
+        svc._pending_tails[0].tail.extend(list(" tail"))
+
+    svc._apply_replacement(job, "OUT", "L-test")
+
+    assert calls == [("//c//", "OUT")]
+    assert deleted == []
+    assert typed == []
+    with svc._undo_lock:
+        u = svc._undo
+    assert u is not None
+    assert u.via_accessibility is True
+    assert u.injected == "OUT"
+    assert u.restore == "//c//"
+
+
 def test_inject_legacy_delete_through_tail_when_cursor_left_disabled(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

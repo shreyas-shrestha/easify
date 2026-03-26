@@ -30,6 +30,10 @@ dev = ["pytest>=7.0"]
 keyboard = ["keyboard>=0.13.5"]
 evdev = ["evdev>=1.6.1"]
 semantic = ["sentence-transformers>=2.2.0"]
+accessibility = [
+    "pyobjc-framework-ApplicationServices>=10.0; sys_platform == 'darwin'",
+    "uiautomation>=2.0.18; sys_platform == 'win32'",
+]
 
 [tool.setuptools.packages.find]
 include = ["app*", "easify*"]

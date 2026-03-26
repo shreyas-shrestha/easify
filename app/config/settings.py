@@ -39,7 +39,7 @@ class Settings:
     trigger: str = field(default_factory=lambda: _env("TRIGGER", "//"))
     capture_close: str = field(default_factory=lambda: _env("CAPTURE_CLOSE", "//").strip())
     use_prefix_trigger: bool = field(default_factory=lambda: _env_bool("ACTIVATION_PREFIX", True))
-    double_space_activation: bool = field(default_factory=lambda: _env_bool("ACTIVATION_DOUBLE_SPACE", False))
+    double_space_activation: bool = field(default_factory=lambda: _env_bool("ACTIVATION_DOUBLE_SPACE", True))
     double_space_window_ms: int = field(
         default_factory=lambda: max(100, min(3000, int(_env("DOUBLE_SPACE_WINDOW_MS", "400"))))
     )
@@ -73,7 +73,7 @@ class Settings:
 
     context_include_focused_app: bool = field(default_factory=lambda: _env_bool("CONTEXT_FOCUSED_APP", True))
     context_buffer_words: int = field(
-        default_factory=lambda: max(0, min(96, int(_env("CONTEXT_BUFFER_WORDS", "0"))))
+        default_factory=lambda: max(0, min(96, int(_env("CONTEXT_BUFFER_WORDS", "8"))))
     )
     expansion_preview: bool = field(default_factory=lambda: _env_bool("EXPANSION_PREVIEW", False))
     evdev_device: str = field(default_factory=lambda: _env("EVDEV_DEVICE", "").strip())
@@ -87,20 +87,20 @@ class Settings:
     fuzzy_score_cutoff: int = field(default_factory=lambda: max(60, min(100, int(_env("FUZZY_SCORE", "82")))))
     fuzzy_max_keys: int = field(default_factory=lambda: int(_env("FUZZY_MAX_KEYS", "5000")))
 
-    live_autocorrect: bool = field(default_factory=lambda: _env_bool("LIVE_AUTOCORRECT", False))
+    live_autocorrect: bool = field(default_factory=lambda: _env_bool("LIVE_AUTOCORRECT", True))
     live_fuzzy: bool = field(default_factory=lambda: _env_bool("LIVE_FUZZY", True))
     live_cache: bool = field(default_factory=lambda: _env_bool("LIVE_CACHE", True))
     live_min_word_len: int = field(default_factory=lambda: max(1, int(_env("LIVE_MIN_WORD_LEN", "3"))))
     live_fuzzy_threshold: int = field(default_factory=lambda: max(50, min(99, int(_env("LIVE_FUZZY_THRESHOLD", "92")))))
     live_cooldown_ms: int = field(default_factory=lambda: max(0, int(_env("LIVE_COOLDOWN_MS", "150"))))
     live_use_clipboard_fallback: bool = field(default_factory=lambda: _env_bool("LIVE_CLIPBOARD_FALLBACK", True))
-    prewarm: bool = field(default_factory=lambda: _env_bool("PREWARM", False))
+    prewarm: bool = field(default_factory=lambda: _env_bool("PREWARM", True))
     startup_health_check: bool = field(default_factory=lambda: _env_bool("STARTUP_HEALTH", True))
     startup_health_timeout_s: float = field(
         default_factory=lambda: max(0.5, min(60.0, float(_env("STARTUP_HEALTH_TIMEOUT", "3"))))
     )
 
-    live_cache_enrich: bool = field(default_factory=lambda: _env_bool("LIVE_CACHE_ENRICH", False))
+    live_cache_enrich: bool = field(default_factory=lambda: _env_bool("LIVE_CACHE_ENRICH", True))
     live_enrich_min_len: int = field(default_factory=lambda: max(3, min(48, int(_env("LIVE_ENRICH_MIN_LEN", "4")))))
     live_enrich_max_per_minute: int = field(
         default_factory=lambda: max(0, min(600, int(_env("LIVE_ENRICH_MAX_PER_MINUTE", "12"))))
@@ -113,7 +113,7 @@ class Settings:
     )
     live_enrich_skip_same: bool = field(default_factory=lambda: _env_bool("LIVE_ENRICH_SKIP_SAME", True))
 
-    phrase_buffer_max: int = field(default_factory=lambda: max(0, min(20, int(_env("PHRASE_BUFFER_MAX", "0")))))
+    phrase_buffer_max: int = field(default_factory=lambda: max(0, min(20, int(_env("PHRASE_BUFFER_MAX", "2")))))
     perf: bool = field(default_factory=lambda: _env_bool("PERF", False))
     inject_prefer_type: bool = field(default_factory=lambda: _env_bool("INJECT_TYPE_FIRST", True))
     pre_inject_refocus: bool = field(default_factory=lambda: _env_bool("PRE_INJECT_REFOCUS", True))
@@ -126,15 +126,17 @@ class Settings:
     )
     # Move cursor left across parallel tail, delete only //capture//, type replacement (tail never deleted).
     inject_tail_via_cursor_left: bool = field(default_factory=lambda: _env_bool("INJECT_TAIL_CURSOR_LEFT", True))
+    # macOS AX / Windows UIA: swap capture substring in focused field (pip install easify[accessibility]).
+    inject_via_accessibility: bool = field(default_factory=lambda: _env_bool("INJECT_ACCESSIBILITY", True))
     metrics_enabled: bool = field(default_factory=lambda: _env_bool("METRICS", False))
 
     backend: str = field(default_factory=lambda: _env("BACKEND", "pynput"))
-    clipboard_restore: bool = field(default_factory=lambda: _env_bool("CLIPBOARD_RESTORE", False))
+    clipboard_restore: bool = field(default_factory=lambda: _env_bool("CLIPBOARD_RESTORE", True))
 
     debug_keys: bool = field(default_factory=lambda: _env_bool("DEBUG", False))
     verbose: bool = field(default_factory=lambda: _env_bool("VERBOSE", False))
 
-    semantic_snippets: bool = field(default_factory=lambda: _env_bool("SEMANTIC_SNIPPETS", False))
+    semantic_snippets: bool = field(default_factory=lambda: _env_bool("SEMANTIC_SNIPPETS", True))
     semantic_model: str = field(
         default_factory=lambda: _env(
             "SEMANTIC_MODEL",
@@ -146,7 +148,7 @@ class Settings:
         default_factory=lambda: max(0.05, min(0.99, float(_env("SEMANTIC_MIN_SIMILARITY", "0.35"))))
     )
     snippet_namespace_lenient: bool = field(
-        default_factory=lambda: _env_bool("SNIPPET_NAMESPACE_LENIENT", False)
+        default_factory=lambda: _env_bool("SNIPPET_NAMESPACE_LENIENT", True)
     )
     cache_promote_min_hits: int = field(
         default_factory=lambda: max(0, min(1_000_000, int(_env("CACHE_PROMOTE_MIN_HITS", "0"))))
