@@ -35,3 +35,28 @@ def test_pipeline_snippet_instant(tmp_path: Path) -> None:
     out = asyncio.run(_run())
     assert out.layer == "L1-snippet-exact"
     assert out.text == "hello"
+
+
+def test_pipeline_snippet_expands_date_placeholder(tmp_path: Path) -> None:
+    sn = tmp_path / "s.json"
+    sn.write_text('{"sig": "— {date:%Y}"}', encoding="utf-8")
+    snippets = SnippetEngine([sn])
+    ac = AutocorrectEngine(None)
+    cache = SqliteExpansionCache(tmp_path / "db.sqlite")
+    fx = FxRateCache(tmp_path / "fx.json")
+    llm = OllamaChatProvider(OllamaClient("http://127.0.0.1:9/nope", "noop", timeout_s=0.1, retries=0))
+    pipe = ExpansionPipeline(
+        snippets=snippets,
+        autocorrect=ac,
+        cache=cache,
+        llm=llm,
+        fx_cache=fx,
+    )
+
+    async def _run() -> object:
+        async with httpx.AsyncClient() as client:
+            return await pipe.expand("sig", client, clipboard_snippet="")
+
+    out = asyncio.run(_run())
+    assert out.layer == "L1-snippet-exact"
+    assert out.text.startswith("— 20") and len(out.text) == 6

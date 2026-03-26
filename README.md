@@ -184,7 +184,15 @@ Intent hints: `emoji happy`, `fix teh`, `convert 5 ft to meters` (see `app/ai/pr
 ## Snippets & autocorrect
 
 - **Snippets:** JSON object / `{ "snippets": { ... } }`. Defaults: `data/snippets.json`, `app/bundled/snippets.json`, then **`~/.config/easify/snippets.json`** (last wins on duplicate keys).
-- **Autocorrect:** `data/autocorrect.json` or `~/.config/easify/autocorrect.json` with `{ "corrections": { "teh": "the", ... } }`. Applied to the captured phrase **before** snippet/LLM resolution.
+- **Snippet placeholders** (`app/snippets/template.py`): values can include `{name}` / `{name:arg}` — literal braces as `{{` / `}}`.
+  - `{date}` / `{date:%Y-%m-%d}` — local date (`strftime` format optional)
+  - `{time}` / `{time:%H:%M}` — local time
+  - `{datetime}` — local ISO timestamp
+  - `{clipboard}` — system clipboard at expansion time (capture path may reuse the async-read buffer when already loaded for L3 context)
+  - `{focused_app}` or `{app}` — foreground app label when available
+  - `{cursor_position}` — always empty (caret index not available from the listener)
+  - `{input:prompt}` or `{prompt:…}` — **capture / palette path only:** opens a small **tkinter** dialog (`asyncio.to_thread`); **omitted on live word** replace (empty string) so Space-boundary fixes stay non-blocking
+- **Autocorrect:** `data/autocorrect.json` or `~/.config/easify/autocorrect.json` with `{ "corrections": { "teh": "the", ... } }`. Applied to the captured phrase **before** snippet/LLM resolution. Fuzzy typos are resolved **once per distinct token shape** in a phrase (repeated identical words share one `rapidfuzz` lookup), so L1 work scales with **unique** unknown cores, not raw token count.
 
 ## Live word buffer (SPACE-boundary)
 
@@ -239,6 +247,7 @@ With **`EASIFY_PHRASE_BUFFER_MAX` &gt; 0**, multi-word phrases use the same stag
 - **Installer / auto-start:** LaunchAgent (macOS), systemd user unit (Linux), Task Scheduler (Windows).
 - **GUI:** settings, cache stats, snippet editor.
 - **Richer enrichment:** promotion of hot cache rows into snippets; embedding / semantic cache.
+- **Multi-step / streaming LLM:** conversational follow-ups, streamed tokens with edit/accept — not implemented today; use **`EASIFY_EXPANSION_PREVIEW`** for atomic accept/cancel and `{input:…}` for simple fill-in-the-blank on the capture path.
 
 ## Development
 

@@ -12,6 +12,7 @@ import time
 from typing import TYPE_CHECKING, Optional
 
 from app.engine.guards import is_safe_phrase_tokens, is_safe_word, preserve_case, ratio_exceeds
+from app.snippets.template import expand_snippet_template
 from app.utils.log import get_logger
 
 if TYPE_CHECKING:
@@ -22,6 +23,23 @@ if TYPE_CHECKING:
 LOG = get_logger(__name__)
 
 _LIVE_CACHE_TAG = "easify:live_word:v1"
+
+
+def _expand_if_snippet_template(value: str) -> str:
+    """Live path: substitute ``{date}``, ``{clipboard}``, etc. No ``{input:}`` (non-interactive)."""
+    if "{" not in value:
+        return value
+    from app.context.focus import get_focused_app_name_fresh
+    from app.utils import clipboard as cb
+
+    clip = cb.get_clipboard() if "{clipboard" in value else ""
+    fa = ""
+    if re.search(r"\{(focused_app|app)(?::|\})", value):
+        try:
+            fa = get_focused_app_name_fresh() or ""
+        except Exception:
+            fa = ""
+    return expand_snippet_template(value, focused_app=fa, clipboard=clip, allow_input_dialog=False)
 
 
 def live_cache_prompt(word_or_phrase: str) -> str:
@@ -72,7 +90,7 @@ def resolve_live_word(
         if "\n" in hit.value or len(hit.value) > 2000:
             LOG.debug("skip huge snippet for live word")
             return None
-        return hit.value
+        return _expand_if_snippet_template(hit.value)
 
     if fuzzy_enabled:
         t0 = time.perf_counter()
@@ -84,7 +102,7 @@ def resolve_live_word(
                 return None
             if "\n" in fz.value or len(fz.value) > 2000:
                 return None
-            return fz.value
+            return _expand_if_snippet_template(fz.value)
 
     if cache_enabled:
         t0 = time.perf_counter()
@@ -121,14 +139,21 @@ def resolve_live_phrase(
     _log_perf(stage_ms, "phrase_guards", t_all)
 
     t0 = time.perf_counter()
+    repl_for: dict[str, Optional[str]] = {}
+    for w in words:
+        lw = w.lower()
+        if lw in repl_for:
+            continue
+        r = autocorrect.lookup_word(lw)
+        if r is None:
+            ac_cut = min(100, max(50, int(fuzzy_threshold) + 1))
+            r = autocorrect.lookup_word_fuzzy(w, score_cutoff=ac_cut)
+        repl_for[lw] = r
     corrected_tokens: list[str] = []
     changed = False
     for w in words:
         lw = w.lower()
-        r = autocorrect.lookup_word(lw)
-        if r is None:
-            ac_cut = min(100, max(50, int(fuzzy_threshold) + 1))
-            r = autocorrect.lookup_word_fuzzy(lw, score_cutoff=ac_cut)
+        r = repl_for.get(lw)
         if r is not None:
             nw = preserve_case(w, r)
             corrected_tokens.append(nw)
@@ -149,7 +174,7 @@ def resolve_live_phrase(
     if hit is not None and hit.value != phrase:
         if "\n" in hit.value or len(hit.value) > 2000:
             return None
-        return hit.value
+        return _expand_if_snippet_template(hit.value)
 
     if fuzzy_enabled:
         t0 = time.perf_counter()
@@ -161,7 +186,7 @@ def resolve_live_phrase(
                 return None
             if "\n" in fz.value or len(fz.value) > 2000:
                 return None
-            return fz.value
+            return _expand_if_snippet_template(fz.value)
 
     if cache_enabled:
         t0 = time.perf_counter()

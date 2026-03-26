@@ -14,6 +14,8 @@ from app.autocorrect.engine import AutocorrectEngine
 from app.cache.store import SqliteExpansionCache
 from app.engine.l0_compute import FxRateCache, try_l0_async
 from app.snippets.engine import SnippetEngine
+from app.snippets.template import expand_snippet_template
+from app.utils import clipboard as cb
 from app.utils.log import get_logger
 
 if TYPE_CHECKING:
@@ -66,6 +68,46 @@ class ExpansionPipeline:
 
     def _log_perf(self, stage_ms: dict[str, float]) -> None:
         LOG.info("capture deterministic perf (ms): %s", stage_ms)
+
+    @staticmethod
+    def _outcome_is_snippet_with_placeholders(outcome: ExpansionOutcome) -> bool:
+        return "snippet" in outcome.layer and "{" in outcome.text
+
+    def _finalize_snippet_value_sync(self, outcome: ExpansionOutcome, *, focused_app: str) -> ExpansionOutcome:
+        if not self._outcome_is_snippet_with_placeholders(outcome):
+            return outcome
+        clip = cb.get_clipboard() if "{clipboard" in outcome.text else ""
+        text = expand_snippet_template(
+            outcome.text,
+            focused_app=focused_app,
+            clipboard=clip,
+            allow_input_dialog=False,
+        )
+        return ExpansionOutcome(text, outcome.layer, outcome.ms)
+
+    async def _finalize_snippet_value_async(
+        self,
+        outcome: ExpansionOutcome,
+        *,
+        focused_app: str,
+        clipboard_hint: str,
+    ) -> ExpansionOutcome:
+        if not self._outcome_is_snippet_with_placeholders(outcome):
+            return outcome
+        clip = clipboard_hint
+        if "{clipboard" in outcome.text and not clip:
+            clip = await asyncio.to_thread(cb.get_clipboard)
+
+        def run() -> str:
+            return expand_snippet_template(
+                outcome.text,
+                focused_app=focused_app,
+                clipboard=clip,
+                allow_input_dialog=True,
+            )
+
+        text = await asyncio.to_thread(run)
+        return ExpansionOutcome(text, outcome.layer, outcome.ms)
 
     def _try_exact_and_fuzzy_snippets(
         self,
@@ -151,7 +193,7 @@ class ExpansionPipeline:
             capture, t0, focused_app=focused_app, namespace_lenient=namespace_lenient, stage_ms=stage_ms
         )
         if det is not None:
-            return det, stage_ms
+            return self._finalize_snippet_value_sync(det, focused_app=focused_app), stage_ms
         if self.semantic_index is not None:
             t = time.perf_counter()
             hit = self.semantic_index.find_best(corrected, focused_app)
@@ -162,7 +204,8 @@ class ExpansionPipeline:
                     self._log_perf(stage_ms)
                 if self._verbose:
                     LOG.info("L2 snippet semantic score=%s (%s ms)", hit.score, round(ms, 2))
-                return ExpansionOutcome(hit.value, "L2-snippet-semantic", ms), stage_ms
+                sem = ExpansionOutcome(hit.value, "L2-snippet-semantic", ms)
+                return self._finalize_snippet_value_sync(sem, focused_app=focused_app), stage_ms
         c = self._try_context_free_cache(corrected, t0, stage_ms)
         return c, stage_ms
 
@@ -200,7 +243,9 @@ class ExpansionPipeline:
             stage_ms=stage_ms,
         )
         if det is not None:
-            return det
+            return await self._finalize_snippet_value_async(
+                det, focused_app=focused_app, clipboard_hint=clipboard_snippet
+            )
 
         if self.semantic_index is not None:
             await asyncio.to_thread(self.semantic_index.prepare_sync)
@@ -213,7 +258,10 @@ class ExpansionPipeline:
                     self._log_perf(stage_ms)
                 if self._verbose:
                     LOG.info("L2 snippet semantic score=%s (%s ms)", hit.score, round(ms, 2))
-                return ExpansionOutcome(hit.value, "L2-snippet-semantic", ms)
+                sem = ExpansionOutcome(hit.value, "L2-snippet-semantic", ms)
+                return await self._finalize_snippet_value_async(
+                    sem, focused_app=focused_app, clipboard_hint=clipboard_snippet
+                )
 
         cache_hit = self._try_context_free_cache(corrected, t0, stage_ms)
         if cache_hit is not None:

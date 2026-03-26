@@ -71,10 +71,29 @@ class AutocorrectEngine:
         return self._dict.get(key)
 
     def apply_to_phrase(self, phrase: str) -> str:
-        """Layer-1 token fix for capture text (preserves spacing style roughly)."""
+        """Layer-1 token fix for capture text (preserves spacing style roughly).
+
+        Fuzzy autocorrect runs at most **once per distinct alphabetic core** in the phrase, not once
+        per token duplicate, so L1 cost stays bounded by unique typos (not phrase length × tokens).
+        """
         if not self._dict or not phrase.strip():
             return phrase
         parts = re.split(r"(\s+)", phrase)
+        repl_for: dict[str, Optional[str]] = {}
+        for p in parts:
+            if not p or p.isspace():
+                continue
+            _lead, core, _trail = _split_punct(p)
+            if not core:
+                continue
+            cl = core.lower()
+            if cl in repl_for:
+                continue
+            repl = self._dict.get(cl)
+            if repl is None:
+                repl = self.lookup_word_fuzzy(core, score_cutoff=93)
+            repl_for[cl] = repl
+
         out: list[str] = []
         for p in parts:
             if not p or p.isspace():
@@ -84,9 +103,7 @@ class AutocorrectEngine:
             if not core:
                 out.append(p)
                 continue
-            repl = self._dict.get(core.lower())
-            if repl is None:
-                repl = self.lookup_word_fuzzy(core, score_cutoff=93)
+            repl = repl_for.get(core.lower())
             if repl is not None:
                 if core.isupper():
                     repl = repl.upper()
