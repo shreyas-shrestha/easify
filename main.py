@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Run: `python -m easify` or `easify` after pip install."""
+"""Shim: run from repo root without install (`python main.py`)."""
 
-from easify.cli import main
+from app.main import main
 
 if __name__ == "__main__":
     main()

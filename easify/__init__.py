@@ -1,3 +1,5 @@
-"""Easify — global LLM-driven text expansion via local Ollama."""
+"""Compatibility re-exports; implementation lives in `app/`."""
 
-__version__ = "0.2.0"
+from app import __version__
+
+__all__ = ["__version__"]

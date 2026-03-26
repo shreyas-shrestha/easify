@@ -36,10 +36,6 @@ EXPAND = (
 
 
 def classify(capture: str) -> tuple[str, str]:
-    """
-    Returns (prompt_for_model, system_string).
-    Strips intent prefixes when they only steer the task; model still sees rest.
-    """
     t = capture.strip()
     low = t.lower()
 
@@ -54,7 +50,6 @@ def classify(capture: str) -> tuple[str, str]:
         return t, CODE
     if low.startswith("expand ") or low.startswith("draft ") or low.startswith("meeting ") or low.startswith("agenda "):
         return t, EXPAND
-    # Single-token typo style: "teh" -> still general but shorter
     if len(t.split()) <= 2 and not any(c in t for c in "/\\"):
         return t, DEFAULT
     return t, DEFAULT

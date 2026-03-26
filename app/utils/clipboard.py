@@ -1,4 +1,4 @@
-"""Clipboard read/write + optional save/restore around paste."""
+"""Clipboard read/write for paste injection."""
 
 from __future__ import annotations
 
