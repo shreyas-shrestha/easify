@@ -132,6 +132,10 @@ class Settings:
     inject_accessibility_match_last: bool = field(
         default_factory=lambda: _env_bool("INJECT_ACCESSIBILITY_MATCH_LAST", True)
     )
+    # AX/UIA: only replace when `old` occurs exactly once in the focused value (multi-field / split editor safe).
+    inject_accessibility_unique_match_only: bool = field(
+        default_factory=lambda: _env_bool("INJECT_ACCESSIBILITY_UNIQUE_MATCH_ONLY", True)
+    )
     metrics_enabled: bool = field(default_factory=lambda: _env_bool("METRICS", False))
 
     backend: str = field(default_factory=lambda: _env("BACKEND", "pynput"))

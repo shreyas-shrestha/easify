@@ -123,7 +123,13 @@ def focused_element_is_password_field() -> bool:
     return False
 
 
-def replace_substring_in_focused_element(old: str, new: str, *, match_last: bool = True) -> bool:
+def replace_substring_in_focused_element(
+    old: str,
+    new: str,
+    *,
+    match_last: bool = True,
+    unique_match_only: bool = True,
+) -> bool:
     focused = _focused_element()
     if focused is None:
         LOG.debug("AX: no focused UI element")
@@ -131,6 +137,13 @@ def replace_substring_in_focused_element(old: str, new: str, *, match_last: bool
     elem, cur = _find_editable_value(focused)
     if not elem or cur is None:
         LOG.debug("AX: could not read editable value from focus chain")
+        return False
+    n = cur.count(old)
+    if unique_match_only and n != 1:
+        LOG.info(
+            "AX: substring occurs %s times in focused field (unique_match_only) — skipping accessibility inject",
+            n,
+        )
         return False
     idx = cur.rfind(old) if match_last else cur.find(old)
     if idx < 0:

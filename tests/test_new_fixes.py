@@ -202,6 +202,16 @@ def test_blocklist_common_words_blocked() -> None:
         assert should_skip_live_enrich_token(word) is True, f"{word!r} should be blocked"
 
 
+def test_text_suggests_ime_heuristic() -> None:
+    from app.engine.guards import is_safe_word, text_suggests_ime_mid_composition
+
+    assert text_suggests_ime_mid_composition("hello") is False
+    assert text_suggests_ime_mid_composition("a\u0301bc") is True
+    assert text_suggests_ime_mid_composition("\u1100") is True
+    assert is_safe_word("caf\u00e9") is True
+    assert is_safe_word("x\u0301yz") is False
+
+
 def test_blocklist_uncommon_words_not_blocked() -> None:
     from app.utils.live_enrich_blocklist import should_skip_live_enrich_token
 
@@ -508,10 +518,12 @@ def test_accessibility_inject_skips_synthetic_keys(monkeypatch: pytest.MonkeyPat
     from app.config.settings import Settings
     from app.engine.service import ExpansionJob, ExpansionService, _PendingExpansionTail
 
-    calls: list[tuple[str, str]] = []
+    calls: list[tuple] = []
 
-    def fake_replace(*, old: str, new: str, match_last: bool = True) -> bool:
-        calls.append((old, new, match_last))
+    def fake_replace(
+        *, old: str, new: str, match_last: bool = True, unique_match_only: bool = True
+    ) -> bool:
+        calls.append((old, new, match_last, unique_match_only))
         return True
 
     monkeypatch.setattr(acc, "replace_in_focused_field", fake_replace)
@@ -533,7 +545,7 @@ def test_accessibility_inject_skips_synthetic_keys(monkeypatch: pytest.MonkeyPat
 
     svc._apply_replacement(job, "OUT", "L-test")
 
-    assert calls == [("//c//", "OUT", True)]
+    assert calls == [("//c//", "OUT", True, True)]
     assert deleted == []
     assert typed == []
     with svc._undo_lock:
@@ -683,10 +695,12 @@ def test_accessibility_inject_passes_match_last_false(monkeypatch: pytest.Monkey
     from app.config.settings import Settings
     from app.engine.service import ExpansionJob, ExpansionService, _PendingExpansionTail
 
-    calls: list[tuple[str, str, bool]] = []
+    calls: list[tuple] = []
 
-    def fake_replace(*, old: str, new: str, match_last: bool = True) -> bool:
-        calls.append((old, new, match_last))
+    def fake_replace(
+        *, old: str, new: str, match_last: bool = True, unique_match_only: bool = True
+    ) -> bool:
+        calls.append((old, new, match_last, unique_match_only))
         return True
 
     monkeypatch.setattr(acc, "replace_in_focused_field", fake_replace)
@@ -697,4 +711,4 @@ def test_accessibility_inject_passes_match_last_false(monkeypatch: pytest.Monkey
     job = ExpansionJob(capture="c", delete_count=10, undo_restore="//c//")
     svc._pending_tails.append(_PendingExpansionTail(job=job))
     svc._apply_replacement(job, "OUT", "L-test")
-    assert calls == [("//c//", "OUT", False)]
+    assert calls == [("//c//", "OUT", False, True)]

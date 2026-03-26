@@ -12,7 +12,7 @@ from pynput.keyboard import Controller, Key, Listener
 from app.config.settings import Settings
 from app.context.focus import get_focused_app_name_fresh
 from app.engine.buffer import CaptureBuffer, CloseDelimiterMatcher, TriggerState
-from app.engine.guards import is_safe_phrase_tokens, is_safe_word
+from app.engine.guards import is_safe_phrase_tokens, is_safe_word, text_suggests_ime_mid_composition
 from app.engine.live_word import LiveFixCooldown, LiveWordResolver
 from app.engine.service import ExpansionJob, ExpansionService
 from app.keyboard.keys import pynput_key_char, pynput_skip_key
@@ -51,6 +51,7 @@ class KeyboardListener:
 
         self._dbl_armed = False
         self._dbl_last_mono = 0.0
+        self._listener_io_lock = threading.Lock()
         self._close_matcher: Optional[CloseDelimiterMatcher] = None
         self._recent_chars: deque[str] = deque(maxlen=16)
 
@@ -150,6 +151,11 @@ class KeyboardListener:
                 self._phrase_deque.clear()
             return
         self._push_rolling_word(word)
+        if text_suggests_ime_mid_composition(word):
+            if self._phrase_deque is not None:
+                self._phrase_deque.append(word)
+            LOG.debug("live fix skipped: possible IME / script composition in %r", word[:48])
+            return
         if not self._live_cooldown.can_fix():
             return
         if self._phrase_deque is not None:
@@ -313,6 +319,9 @@ class KeyboardListener:
         if focused_field_appears_secure():
             LOG.debug("live replace skipped: secure/password field")
             return
+        if text_suggests_ime_mid_composition(old_word):
+            LOG.debug("live replace skipped: IME heuristic on token %r", old_word[:48])
+            return
         with self.service.inject_lock:
             try:
                 self._delete_n(len(old_word) + 1)
@@ -372,50 +381,99 @@ class KeyboardListener:
             return
         if self.service.inject_lock.locked():
             return
-        if pynput_skip_key(key, capture_active=(self._state == _STATE_CAPTURING)):
-            return
-
-        ch = pynput_key_char(key)
-
-        if self._state == _STATE_IDLE and ch is not None and len(ch) == 1:
-            self._recent_chars.append(ch)
-
-        if self._state == _STATE_CAPTURING:
-            if key == Key.esc:
-                self._cancel_capture()
+        with self._listener_io_lock:
+            if pynput_skip_key(key, capture_active=(self._state == _STATE_CAPTURING)):
                 return
-            if key in (Key.enter, getattr(Key, "kp_enter", Key.enter)):
-                self._submit_capture(entered_with_newline=True)
-                return
+            ch = pynput_key_char(key)
 
-            if ch == "\b":
-                if self._close_matcher is not None and self._close_matcher.backspace():
+            if self._state == _STATE_IDLE and ch is not None and len(ch) == 1:
+                self._recent_chars.append(ch)
+
+            if self._state == _STATE_CAPTURING:
+                if key == Key.esc:
+                    self._cancel_capture()
                     return
-                self._capture.backspace()
-                return
+                if key in (Key.enter, getattr(Key, "kp_enter", Key.enter)):
+                    self._submit_capture(entered_with_newline=True)
+                    return
 
-            if self._close_matcher is not None and ch is not None and ch != "\n":
-                for ev in self._close_matcher.feed(ch):
-                    if ev[0] == "submit":
-                        self._submit_capture(entered_with_newline=False)
+                if ch == "\b":
+                    if self._close_matcher is not None and self._close_matcher.backspace():
                         return
-                    append_ch = ev[1]
-                    if append_ch is not None:
-                        self._capture.push(append_ch)
-                if self.debug and len(self._capture.chars) <= 80:
-                    LOG.debug("capture %r", self._capture.text())
+                    self._capture.backspace()
+                    return
+
+                if self._close_matcher is not None and ch is not None and ch != "\n":
+                    for ev in self._close_matcher.feed(ch):
+                        if ev[0] == "submit":
+                            self._submit_capture(entered_with_newline=False)
+                            return
+                        append_ch = ev[1]
+                        if append_ch is not None:
+                            self._capture.push(append_ch)
+                    if self.debug and len(self._capture.chars) <= 80:
+                        LOG.debug("capture %r", self._capture.text())
+                    return
+
+                if ch is not None and ch != "\n":
+                    self._capture.push(ch)
+                    if self.debug and len(self._capture.chars) <= 80:
+                        LOG.debug("capture %r", self._capture.text())
                 return
 
-            if ch is not None and ch != "\n":
-                self._capture.push(ch)
-                if self.debug and len(self._capture.chars) <= 80:
-                    LOG.debug("capture %r", self._capture.text())
-            return
+            # If a capture expansion is in flight, buffer subsequent keystrokes so the eventual
+            # inject can replace capture+tail atomically. Still allow starting a new capture
+            # with the trigger: while a trigger prefix is in progress, do not add chars to tail.
+            if self._state == _STATE_IDLE and self.service.has_pending_expansion_tail():
+                if self.settings.use_prefix_trigger and self.trigger:
+                    completed = self._trigger.try_advance(ch, self.trigger)
+                    if completed:
+                        if self._suppress_capture_for_url_scheme_slash_slash():
+                            LOG.debug("skip capture: // is part of http(s): / file: / ftp: URL")
+                            return
+                        if self.debug:
+                            LOG.debug("capture mode on (prefix)")
+                        self._state = _STATE_CAPTURING
+                        self._capture_from_prefix = True
+                        self._capture.clear()
+                        self._close_matcher = (
+                            CloseDelimiterMatcher(self.settings.capture_close)
+                            if self.settings.capture_close.strip()
+                            else None
+                        )
+                        self._live_clear()
+                        return
+                    if self._trigger.in_progress:
+                        # Don't buffer into tail while we're determining whether a new trigger begins.
+                        self._live_clear()
+                        return
 
-        # If a capture expansion is in flight, buffer subsequent keystrokes so the eventual
-        # inject can replace capture+tail atomically. Still allow starting a new capture
-        # with the trigger: while a trigger prefix is in progress, do not add chars to tail.
-        if self._state == _STATE_IDLE and self.service.has_pending_expansion_tail():
+                if ch is not None:
+                    self.service.append_expansion_tail_char(ch)
+                if self._live_resolver is not None:
+                    self._handle_live_key_context_only(key, ch)
+                else:
+                    self._context_idle_key(ch)
+                return
+
+            if ch != " " and self._state == _STATE_IDLE:
+                self._dbl_armed = False
+
+            if (
+                self._state == _STATE_IDLE
+                and ch == " "
+                and self.settings.double_space_activation
+            ):
+                now = time.monotonic()
+                win = self.settings.double_space_window_ms / 1000.0
+                if self._dbl_armed and (now - self._dbl_last_mono) > win:
+                    self._dbl_armed = False
+                if self._dbl_armed and (now - self._dbl_last_mono) <= win:
+                    self._enter_capture_from_double_space()
+                    return
+                self._dbl_armed = True
+                self._dbl_last_mono = now
+
             if self.settings.use_prefix_trigger and self.trigger:
                 completed = self._trigger.try_advance(ch, self.trigger)
                 if completed:
@@ -435,62 +493,13 @@ class KeyboardListener:
                     self._live_clear()
                     return
                 if self._trigger.in_progress:
-                    # Don't buffer into tail while we're determining whether a new trigger begins.
                     self._live_clear()
                     return
 
-            if ch is not None:
-                self.service.append_expansion_tail_char(ch)
             if self._live_resolver is not None:
-                self._handle_live_key_context_only(key, ch)
+                self._handle_live_key(key, ch)
             else:
                 self._context_idle_key(ch)
-            return
-
-        if ch != " " and self._state == _STATE_IDLE:
-            self._dbl_armed = False
-
-        if (
-            self._state == _STATE_IDLE
-            and ch == " "
-            and self.settings.double_space_activation
-        ):
-            now = time.monotonic()
-            win = self.settings.double_space_window_ms / 1000.0
-            if self._dbl_armed and (now - self._dbl_last_mono) > win:
-                self._dbl_armed = False
-            if self._dbl_armed and (now - self._dbl_last_mono) <= win:
-                self._enter_capture_from_double_space()
-                return
-            self._dbl_armed = True
-            self._dbl_last_mono = now
-
-        if self.settings.use_prefix_trigger and self.trigger:
-            completed = self._trigger.try_advance(ch, self.trigger)
-            if completed:
-                if self._suppress_capture_for_url_scheme_slash_slash():
-                    LOG.debug("skip capture: // is part of http(s): / file: / ftp: URL")
-                    return
-                if self.debug:
-                    LOG.debug("capture mode on (prefix)")
-                self._state = _STATE_CAPTURING
-                self._capture_from_prefix = True
-                self._capture.clear()
-                self._close_matcher = (
-                    CloseDelimiterMatcher(self.settings.capture_close)
-                    if self.settings.capture_close.strip()
-                    else None
-                )
-                self._live_clear()
-                return
-            if self._trigger.in_progress:
-                self._live_clear()
-                return
-
-        if self._live_resolver is not None:
-            self._handle_live_key(key, ch)
-        else:
-            self._context_idle_key(ch)
 
     def _setup_inject(self, ctrl: Controller) -> None:
         import platform

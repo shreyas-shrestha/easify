@@ -37,9 +37,16 @@ def focused_field_appears_secure() -> bool:
     return False
 
 
-def replace_in_focused_field(*, old: str, new: str, match_last: bool = True) -> bool:
+def replace_in_focused_field(
+    *,
+    old: str,
+    new: str,
+    match_last: bool = True,
+    unique_match_only: bool = True,
+) -> bool:
     """
     Replace ``old`` with ``new`` in the focused text field (``match_last``: rfind vs find).
+    ``unique_match_only``: require exactly one occurrence of ``old`` in the field (avoids wrong pane).
     Does not synthesize keys. Requires OS accessibility permissions (macOS) / UIAccess (Win).
     """
     old_s = old or ""
@@ -49,11 +56,15 @@ def replace_in_focused_field(*, old: str, new: str, match_last: bool = True) -> 
         if sys.platform == "darwin":
             from app.inject.ax_macos import replace_substring_in_focused_element
 
-            return replace_substring_in_focused_element(old_s, new, match_last=match_last)
+            return replace_substring_in_focused_element(
+                old_s, new, match_last=match_last, unique_match_only=unique_match_only
+            )
         if sys.platform == "win32":
             from app.inject.uia_windows import replace_substring_in_focused_element
 
-            return replace_substring_in_focused_element(old_s, new, match_last=match_last)
+            return replace_substring_in_focused_element(
+                old_s, new, match_last=match_last, unique_match_only=unique_match_only
+            )
     except ImportError as e:
         LOG.debug("accessibility inject: import error %s", e)
     except Exception as e:

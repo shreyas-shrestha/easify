@@ -45,7 +45,11 @@ class TriggerState:
 
 @dataclass
 class CloseDelimiterMatcher:
-    """Match a closing delimiter in a stream without committing it to the capture buffer."""
+    """Match a closing delimiter in a stream without committing it to the capture buffer.
+
+    Not thread-safe; :class:`KeyboardListener` serializes all ``feed`` / ``backspace`` / ``reset``
+    calls via ``_listener_io_lock`` so pynput callbacks cannot interleave.
+    """
 
     close: str
     pending: str = ""

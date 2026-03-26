@@ -40,7 +40,13 @@ def focused_control_is_password_field() -> bool:
     return False
 
 
-def replace_substring_in_focused_element(old: str, new: str, *, match_last: bool = True) -> bool:
+def replace_substring_in_focused_element(
+    old: str,
+    new: str,
+    *,
+    match_last: bool = True,
+    unique_match_only: bool = True,
+) -> bool:
     import uiautomation as auto
 
     c = auto.GetFocusedControl()
@@ -58,6 +64,13 @@ def replace_substring_in_focused_element(old: str, new: str, *, match_last: bool
         cur = vp.Value or ""
     except Exception:
         cur = ""
+    n = cur.count(old)
+    if unique_match_only and n != 1:
+        LOG.info(
+            "UIA: substring occurs %s times in focused field (unique_match_only) — skipping accessibility inject",
+            n,
+        )
+        return False
     idx = cur.rfind(old) if match_last else cur.find(old)
     if idx < 0:
         LOG.debug("UIA: capture substring not found (len=%s)", len(cur))

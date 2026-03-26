@@ -38,6 +38,8 @@ inject_prefer_type = true
 inject_via_accessibility = true
 # AX/UIA replace: true = last occurrence (rfind), false = first occurrence (find) when text repeats in field.
 # inject_accessibility_match_last = true
+# Require exactly one match in the focused field before AX/UIA replace (avoids wrong pane when focus moved).
+# inject_accessibility_unique_match_only = true
 clipboard_restore = true
 metrics = false
 

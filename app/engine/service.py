@@ -227,6 +227,7 @@ class ExpansionService:
                         old=frame.injected,
                         new=frame.restore or "",
                         match_last=self.settings.inject_accessibility_match_last,
+                        unique_match_only=False,
                     )
                     if ok and self.metrics is not None:
                         self.metrics.incr("undo_expansions")
@@ -646,6 +647,7 @@ class ExpansionService:
                         old=capture_span,
                         new=text,
                         match_last=self.settings.inject_accessibility_match_last,
+                        unique_match_only=self.settings.inject_accessibility_unique_match_only,
                     ):
                         injected_ok = True
                         to_inject = text
