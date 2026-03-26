@@ -32,13 +32,25 @@ def _icon_image(state: str):
     return img
 
 
-def _format_tooltip(snap: "TraySnapshot") -> str:
+def _format_tooltip(snap: "TraySnapshot", *, hint_after_s: float = 2.0) -> str:
     lines = [
         f"Easify — {snap.status}",
         f"Model: {snap.model}",
         f"Queued: {snap.expansion_queued} expansion | {snap.enrich_queued} enrich",
         f"Undo stack: {snap.undo_depth}",
     ]
+    if snap.status == "thinking":
+        cap = (snap.thinking_capture or "").strip()
+        lines.append(f"Intent: {cap[:180]}" if cap else "Resolving…")
+        if snap.thinking_elapsed_s >= max(0.5, hint_after_s):
+            lines.append(
+                f"Elapsed {snap.thinking_elapsed_s:.1f}s — LLM timeout up to {snap.l3_timeout_s:.0f}s "
+                "(EASIFY_OLLAMA_TIMEOUT). If Ollama is down you will get an error after retries / timeout."
+            )
+        elif snap.thinking_elapsed_s >= 0.5:
+            lines.append(f"Elapsed {snap.thinking_elapsed_s:.1f}s…")
+    if snap.degraded_hint:
+        lines.append(f"Hint: {snap.degraded_hint[:500]}")
     if snap.status == "error" and snap.detail:
         lines.append(f"Summary: {snap.detail[:600]}")
     elif snap.detail:
@@ -93,7 +105,6 @@ def run_tray_app(
         MenuItem("Quit", _quit),
     )
     icon = pystray.Icon("Easify", _icon_image("idle"), title="Easify", menu=menu)
-    icon_ref.append(icon)
     if icon_holder is not None:
         icon_holder.clear()
         icon_holder.append(icon)
@@ -109,7 +120,7 @@ def run_tray_app(
                     icon.icon = _icon_image(snap.status)
                 except Exception:
                     pass
-            title = _format_tooltip(snap)
+            title = _format_tooltip(snap, hint_after_s=service.settings.tray_thinking_hint_after_s)
             if title != last_title:
                 last_title = title
                 try:

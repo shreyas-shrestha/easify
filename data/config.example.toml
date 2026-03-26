@@ -73,6 +73,10 @@ snippet_namespace_lenient = true
 # ui_host = "127.0.0.1"
 # ui_port = 8765
 # ui_secret_token = "generate-a-long-random-string"
+# `easify run` reload hook (snippet UI pushes here). 0 = disable.
+# snippet_reload_listen_port = 8766
+# Tray tooltip: after N seconds in “thinking”, show elapsed time + EASIFY_OLLAMA_TIMEOUT hint.
+# tray_thinking_hint_after_s = 2
 # cache_promote_max_keys = 500
 # double_space_settle_ms = 0
 # pre_inject_refocus = true

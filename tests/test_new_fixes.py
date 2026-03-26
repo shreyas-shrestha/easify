@@ -296,6 +296,44 @@ def test_tray_snapshot_includes_queues_and_undo_depth(monkeypatch: pytest.Monkey
     assert snap.model
     assert snap.expansion_queued == 0
     assert snap.undo_depth == 2
+    assert snap.thinking_elapsed_s == 0.0
+    assert snap.l3_timeout_s >= 30.0
+
+
+def test_reload_snippets_hot_invalidates_semantic(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("EASIFY_TRAY", "0")
+    monkeypatch.setenv("EASIFY_SEMANTIC_SNIPPETS", "0")
+    from app.config.settings import Settings
+    from app.engine.service import ExpansionService
+
+    svc = ExpansionService(Settings.load())
+    svc.reload_snippets_hot()
+
+
+def test_pre_inject_refocus_only_for_l3_layer(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("EASIFY_TRAY", "0")
+    monkeypatch.setenv("EASIFY_INJECT_SETTLE_MS", "0")
+    monkeypatch.setenv("EASIFY_INJECT_ACCESSIBILITY", "0")
+    from app.config.settings import Settings
+    from app.engine.service import ExpansionJob, ExpansionService, _PendingExpansionTail
+
+    calls: list[str] = []
+
+    def fake_refocus(*, captured_app: str, cmd_timeout: float = 1.25) -> None:
+        calls.append(captured_app)
+
+    monkeypatch.setattr("app.engine.service.refocus_if_needed_for_inject", fake_refocus)
+
+    svc = ExpansionService(Settings.load())
+    svc.set_inject(lambda n: None, lambda t: None, type_fn=lambda s: None, cursor_left_fn=lambda n: None)
+    job1 = ExpansionJob(capture="c", delete_count=3, undo_restore="//c//", focused_app_at_submit="Notes")
+    svc._pending_tails.append(_PendingExpansionTail(job=job1))
+    svc._apply_replacement(job1, "OUT", "L0-units")
+    assert calls == []
+    job2 = ExpansionJob(capture="d", delete_count=3, undo_restore="//d//", focused_app_at_submit="Notes")
+    svc._pending_tails.append(_PendingExpansionTail(job=job2))
+    svc._apply_replacement(job2, "OUT2", "L3-ollama")
+    assert calls == ["Notes"]
 
 
 def test_undo_stack_drops_oldest_when_over_max(monkeypatch: pytest.MonkeyPatch) -> None:

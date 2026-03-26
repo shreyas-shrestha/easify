@@ -165,6 +165,14 @@ class Settings:
     ui_host: str = field(default_factory=lambda: _env("UI_HOST", "127.0.0.1").strip() or "127.0.0.1")
     ui_port: int = field(default_factory=lambda: max(1, min(65535, int(_env("UI_PORT", "8765")))))
     ui_secret_token: str = field(default_factory=lambda: _env("UI_SECRET_TOKEN", "").strip())
+    # `easify run` binds this localhost port for POST /hooks/reload-snippets (snippet UI notifies). 0 = off.
+    snippet_reload_listen_port: int = field(
+        default_factory=lambda: max(0, min(65535, int(_env("SNIPPET_RELOAD_LISTEN_PORT", "8766"))))
+    )
+    # After N seconds in "thinking", tray tooltip adds a slow-LLM / timeout-cap reminder.
+    tray_thinking_hint_after_s: float = field(
+        default_factory=lambda: max(0.5, min(120.0, float(_env("TRAY_THINKING_HINT_AFTER_S", "2"))))
+    )
     cache_promote_max_keys: int = field(
         default_factory=lambda: max(0, min(100_000, int(_env("CACHE_PROMOTE_MAX_KEYS", "500"))))
     )

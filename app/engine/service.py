@@ -18,7 +18,7 @@ from app.ai.factory import build_chat_provider
 from app.autocorrect.engine import AutocorrectEngine
 from app.cache.store import SqliteExpansionCache
 from app.config.settings import Settings
-from app.context.focus import get_focused_app_name, refocus_if_needed_for_inject
+from app.context.focus import get_focused_app_name, layer_warrants_pre_inject_refocus, refocus_if_needed_for_inject
 from app.engine.l0_compute import FxRateCache
 from app.engine.live_word import live_cache_prompt
 from app.engine.pipeline import ExpansionPipeline
@@ -59,6 +59,11 @@ class TraySnapshot:
     expansion_queued: int
     enrich_queued: int
     undo_depth: int
+    # Monotonic seconds in "thinking" (0 if idle); LLM wall-clock cap for tooltip context.
+    thinking_elapsed_s: float
+    thinking_capture: str
+    l3_timeout_s: float
+    degraded_hint: str
 
 
 @dataclass(frozen=True)
@@ -125,6 +130,9 @@ class ExpansionService:
         self._tray_detail = ""
         self._tray_last_success_detail = ""
         self._tray_last_error = ""
+        self._tray_degraded_hint = ""
+        self._tray_thinking_started_mono: float = 0.0
+        self._tray_thinking_capture: str = ""
         self._delete_fn: Optional[Callable[[int], None]] = None
         self._paste_fn: Optional[Callable[[str], None]] = None
         self._type_fn: Optional[Callable[[str], None]] = None
@@ -278,12 +286,17 @@ class ExpansionService:
         exp_q = self._queue.qsize() if self._queue is not None else 0
         enr_q = self._enrich_queue.qsize() if self._enrich_queue is not None else 0
         model = self.cache_model_id
+        now = time.monotonic()
         with self._tray_lock:
             st = self._tray_status
             det = self._tray_detail
             err = self._tray_last_error
+            deg = self._tray_degraded_hint
+            t0 = self._tray_thinking_started_mono
+            cap_prev = self._tray_thinking_capture
         with self._undo_lock:
             udepth = len(self._undo_stack)
+        elapsed = (now - t0) if (st == "thinking" and t0 > 0) else 0.0
         return TraySnapshot(
             status=st,
             detail=det,
@@ -292,13 +305,20 @@ class ExpansionService:
             expansion_queued=exp_q,
             enrich_queued=enr_q,
             undo_depth=udepth,
+            thinking_elapsed_s=elapsed,
+            thinking_capture=cap_prev,
+            l3_timeout_s=float(self.settings.ollama_timeout_s),
+            degraded_hint=deg,
         )
 
     def tray_set_thinking(self, preview: str = "") -> None:
         with self._tray_lock:
             self._tray_status = "thinking"
             self._tray_detail = preview[:220]
+            self._tray_thinking_capture = preview[:220]
+            self._tray_thinking_started_mono = time.monotonic()
             self._tray_last_error = ""
+            self._tray_degraded_hint = ""
 
     def tray_set_idle(self, last_expansion: str = "") -> None:
         with self._tray_lock:
@@ -306,12 +326,18 @@ class ExpansionService:
             self._tray_detail = last_expansion[:220]
             self._tray_last_success_detail = self._tray_detail
             self._tray_last_error = ""
+            self._tray_degraded_hint = ""
+            self._tray_thinking_started_mono = 0.0
+            self._tray_thinking_capture = ""
 
-    def tray_set_error(self, message: str) -> None:
+    def tray_set_error(self, message: str, *, degraded_hint: str = "") -> None:
         with self._tray_lock:
             self._tray_status = "error"
             self._tray_last_error = (message or "")[:8000]
             self._tray_detail = (message or "")[:500]
+            self._tray_degraded_hint = (degraded_hint or "")[:500]
+            self._tray_thinking_started_mono = 0.0
+            self._tray_thinking_capture = ""
 
     def tray_clear_error(self) -> None:
         """Clear error state from the tray after the user has read or copied the message."""
@@ -320,7 +346,15 @@ class ExpansionService:
                 return
             self._tray_status = "idle"
             self._tray_last_error = ""
+            self._tray_degraded_hint = ""
             self._tray_detail = self._tray_last_success_detail
+
+    def reload_snippets_hot(self) -> None:
+        """Reload snippet JSON from disk (daemon hook or snippet UI notify)."""
+        self.snippets.reload()
+        if self.semantic_index is not None:
+            self.semantic_index.invalidate_after_file_change()
+        LOG.info("snippets reloaded (hot)")
 
     @property
     def cache_model_id(self) -> str:
@@ -528,7 +562,20 @@ class ExpansionService:
             except Exception as e:
                 self._discard_pending_tail(job)
                 lump = f"{e}\n{traceback.format_exc()}"
-                self.tray_set_error(lump)
+                hint = ""
+                if isinstance(e, httpx.ConnectError):
+                    hint = "Cannot reach the LLM HTTP endpoint (connection failed). Is Ollama running and reachable?"
+                elif isinstance(e, httpx.ReadTimeout):
+                    hint = (
+                        f"LLM read timed out after {self.settings.ollama_timeout_s}s. "
+                        "Try a smaller prompt or raise EASIFY_OLLAMA_TIMEOUT."
+                    )
+                elif isinstance(e, httpx.TimeoutException):
+                    hint = (
+                        f"LLM HTTP request timed out (client limit {self.settings.ollama_timeout_s}s). "
+                        "The model may be overloaded or the prompt too large."
+                    )
+                self.tray_set_error(lump, degraded_hint=hint)
                 LOG.exception("expansion failed: %s", e)
 
     def _wait_tail_quiet(self, job: ExpansionJob) -> None:
@@ -564,7 +611,7 @@ class ExpansionService:
         via_ax = False
         with self._inject_lock:
             try:
-                if self.settings.pre_inject_refocus:
+                if self.settings.pre_inject_refocus and layer_warrants_pre_inject_refocus(layer):
                     refocus_if_needed_for_inject(captured_app=job.focused_app_at_submit)
                 tail = self._pop_tail_for_job(job)
                 n_tail = len(tail)

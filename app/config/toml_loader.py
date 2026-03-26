@@ -241,6 +241,18 @@ def apply_toml_to_settings(obj: Any, data: Mapping[str, Any]) -> None:
     take_int("undo_stack_max", "EASIFY_UNDO_STACK_MAX", key="undo_stack_max", lo=1, hi=256)
     take_str("ui_host", "EASIFY_UI_HOST", key="ui_host")
     take_int("ui_port", "EASIFY_UI_PORT", key="ui_port", lo=1, hi=65535)
+    take_int(
+        "snippet_reload_listen_port",
+        "EASIFY_SNIPPET_RELOAD_LISTEN_PORT",
+        key="snippet_reload_listen_port",
+        lo=0,
+        hi=65535,
+    )
+    take_float(
+        "tray_thinking_hint_after_s",
+        "EASIFY_TRAY_THINKING_HINT_AFTER_S",
+        key="tray_thinking_hint_after_s",
+    )
     take_str("ui_secret_token", "EASIFY_UI_SECRET_TOKEN", key="ui_secret_token")
     take_int(
         "cache_promote_max_keys",

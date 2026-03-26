@@ -15,6 +15,33 @@ from app.utils.log import get_logger
 
 LOG = get_logger(__name__)
 
+
+def _notify_daemon_snippet_reload(settings: Settings) -> None:
+    port = int(settings.snippet_reload_listen_port)
+    if port <= 0:
+        return
+    import threading
+    import urllib.error
+    import urllib.request
+
+    tok = settings.ui_secret_token.strip()
+    url = f"http://127.0.0.1:{port}/hooks/reload-snippets"
+
+    def _run() -> None:
+        try:
+            req = urllib.request.Request(url, method="POST", data=b"{}", headers={"Content-Type": "application/json"})
+            if tok:
+                req.add_header("X-Easify-Token", tok)
+            with urllib.request.urlopen(req, timeout=2.0) as resp:
+                if resp.status != 200:
+                    LOG.debug("daemon reload returned %s", resp.status)
+        except urllib.error.HTTPError as e:
+            LOG.debug("daemon snippet reload HTTP %s: %s", e.code, e.reason)
+        except Exception as e:
+            LOG.debug("daemon snippet reload notify: %s", e)
+
+    threading.Thread(target=_run, daemon=True).start()
+
 _INDEX_HTML_TEMPLATE = """<!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8"/><title>Easify snippets</title>
 <style>
@@ -25,7 +52,7 @@ button{padding:8px 14px;cursor:pointer}
 .muted{color:#666;font-size:0.9em}
 </style></head><body>
 <h1>Easify snippets</h1>
-<p class="muted">Editing <code id="path"></code> — localhost only. POST/DELETE require <code>X-Easify-Token</code> (see server log). Changes apply on the next snippet lookup (mtime reload).</p>
+<p class="muted">Editing <code id="path"></code> — localhost only. POST/DELETE require <code>X-Easify-Token</code> (see server log). If <code>easify run</code> is active, changes are pushed to the daemon immediately (reload hook on port <code id="rport"></code>).</p>
 <div class="row"><h2>Add / update</h2>
 <label>Key <input id="k" placeholder="thanks or slack:thanks"/></label>
 <label>Value <textarea id="v" rows="4" placeholder="Expanded text"></textarea></label>
@@ -42,6 +69,7 @@ async function load(){
   if(!r.ok){listEl.textContent='Error: '+r.status+' '+await r.text();return;}
   const j=await r.json();
   pathEl.textContent=j.path||'';
+  const rp=document.getElementById('rport'); if(rp) rp.textContent=String(j.reload_port||'off');
   const s=j.snippets||{};
   const keys=Object.keys(s).sort();
   if(keys.length===0){listEl.textContent='(empty)';return;}
@@ -141,9 +169,14 @@ def run_snippet_ui(settings: Settings) -> None:
                     self._send(HTTPStatus.FORBIDDEN, b"forbidden", "text/plain; charset=utf-8")
                     return
                 inner = _load_inner(user_path)
-                payload = json.dumps({"path": str(user_path), "snippets": inner}, ensure_ascii=False).encode(
-                    "utf-8"
-                )
+                payload = json.dumps(
+                    {
+                        "path": str(user_path),
+                        "snippets": inner,
+                        "reload_port": int(settings.snippet_reload_listen_port),
+                    },
+                    ensure_ascii=False,
+                ).encode("utf-8")
                 self._send(HTTPStatus.OK, payload, "application/json; charset=utf-8")
                 return
             self._send(HTTPStatus.NOT_FOUND, b"not found", "text/plain; charset=utf-8")
@@ -182,6 +215,7 @@ def run_snippet_ui(settings: Settings) -> None:
             except OSError as e:
                 self._send(HTTPStatus.INTERNAL_SERVER_ERROR, str(e).encode(), "text/plain; charset=utf-8")
                 return
+            _notify_daemon_snippet_reload(settings)
             self._send(HTTPStatus.OK, b"ok", "text/plain; charset=utf-8")
 
         def do_DELETE(self) -> None:  # noqa: N802
@@ -208,6 +242,7 @@ def run_snippet_ui(settings: Settings) -> None:
             except OSError as e:
                 self._send(HTTPStatus.INTERNAL_SERVER_ERROR, str(e).encode(), "text/plain; charset=utf-8")
                 return
+            _notify_daemon_snippet_reload(settings)
             self._send(HTTPStatus.OK, b"ok", "text/plain; charset=utf-8")
 
     server = ThreadingHTTPServer((host, port), Handler)

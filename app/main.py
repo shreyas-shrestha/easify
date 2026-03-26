@@ -93,6 +93,7 @@ def main() -> None:
         sys.exit(2)
 
     service = ExpansionService(settings)
+    stop = threading.Event()
     service.start()
     service.preload_cache_metadata()
     if settings.prewarm:
@@ -127,7 +128,10 @@ def main() -> None:
         settings.context_buffer_words,
     )
 
-    stop = threading.Event()
+    from app.ui.daemon_hooks import start_snippet_reload_hook_server
+
+    start_snippet_reload_hook_server(service, settings, stop=stop)
+
     # macOS: pystray/AppKit requires menu-bar work on the main thread; SIGINT needs icon.stop().
     tray_icon_ref: list = []
     hotkey_listener = None
@@ -144,17 +148,13 @@ def main() -> None:
         try:
             from pynput import keyboard as kb
 
-            from app.ui.palette import open_expansion_palette
+            from app.ui.palette import enqueue_palette_request, start_palette_worker
 
+            start_palette_worker(service, settings)
             hk_str = settings.palette_hotkey.strip()
 
             def _palette() -> None:
-                pw = listener._prior_context_string()
-
-                def _run() -> None:
-                    open_expansion_palette(service, settings, prior_words=pw)
-
-                threading.Thread(target=_run, daemon=True).start()
+                enqueue_palette_request(listener._prior_context_string())
 
             hotkey_listener = kb.GlobalHotKeys({hk_str: _palette})
             hotkey_listener.start()

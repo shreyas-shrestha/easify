@@ -70,7 +70,7 @@ Cache keys for **contextual** L3 rows include the augmented system string (app +
 | **Semantic snippet match** | `EASIFY_SEMANTIC_SNIPPETS=1` (default) — embedding similarity on keys after fuzzy miss; install `easify[semantic]` (or `sentence-transformers`) or Easify logs and skips. `EASIFY_SEMANTIC_MODEL`, `EASIFY_SEMANTIC_MIN_SIMILARITY` (default `0.35`) |
 | **Per-app snippet keys** | Keys `namespace:rest` (e.g. `slack:thanks`) only resolve when the **focused app** name contains `namespace`, unless `EASIFY_SNIPPET_NAMESPACE_LENIENT=1` (show all when focus is unknown) |
 | **Cache → snippet promotion** | `EASIFY_CACHE_PROMOTE_MIN_HITS=N` (default `0` = off): after each cache hit, if `hit_count ≥ N` and source is in `EASIFY_CACHE_PROMOTE_SOURCES` (default `ai,bg`), append `promoted-<slug>` to `~/.config/easify/snippets.json` (deduped) |
-| **Snippet web UI** | `easify ui` — `http://127.0.0.1:8765/` by default (`EASIFY_UI_HOST`, `EASIFY_UI_PORT`). **All** `/api/snippets` requests require header `X-Easify-Token` (set `EASIFY_UI_SECRET_TOKEN` or copy the token from the log line on startup) to reduce drive‑by CSRF from other browser tabs. |
+| **Snippet web UI** | `easify ui` — `http://127.0.0.1:8765/` by default (`EASIFY_UI_HOST`, `EASIFY_UI_PORT`). **All** `/api/snippets` requests require header `X-Easify-Token` (set `EASIFY_UI_SECRET_TOKEN` or copy the token from the log line on startup). While **`easify run`** is up, it listens on **`EASIFY_SNIPPET_RELOAD_LISTEN_PORT`** (default `8766`, `0` = off) for **`POST /hooks/reload-snippets`**; the web UI notifies the daemon after each save/delete so snippets (and semantic embeddings) reload **immediately** without waiting for mtime polling. |
 | **Promotion cap** | `EASIFY_CACHE_PROMOTE_MAX_KEYS` (default `500`, `0` = unlimited) stops unbounded `promoted-*` growth |
 | **Double-space timing** | `EASIFY_DOUBLE_SPACE_SETTLE_MS` (default `20`): brief pause after deleting the two spaces before capture mode so focused apps can process backspaces (pynput race mitigation) |
 | **Live enrich** | Ultra-common words are skipped via `app/bundled/live_enrich_blocklist.txt` (no config knob) |
@@ -148,6 +148,8 @@ See `data/config.example.toml` in the repo.
 | `EASIFY_PALETTE_HOTKEY` | e.g. `<ctrl>+<shift>+e>` — floating palette |
 | `EASIFY_CAPTURE_MAX_CHARS` | Max captured intent length (default `4000`) |
 | `EASIFY_TRAY` | `1` = system tray icon + status (default) |
+| `EASIFY_SNIPPET_RELOAD_LISTEN_PORT` | `easify run` localhost port for snippet UI push-reload (default `8766`; `0` = off) |
+| `EASIFY_TRAY_THINKING_HINT_AFTER_S` | After N seconds “thinking”, tray tooltip adds elapsed time + timeout hint (default `2`) |
 | `EASIFY_TRIGGER` | Prefix (default `//`) when prefix activation is on |
 | `EASIFY_CAPTURE_CLOSE` | Close delimiter for inline submit (default `//`); empty = Enter-only |
 | `EASIFY_SNIPPETS` | Single snippets JSON path (overrides default path list) |

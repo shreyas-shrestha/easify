@@ -67,6 +67,11 @@ class SnippetSemanticIndex:
     def _display_key(k: str) -> str:
         return k.replace(":", " ")
 
+    def invalidate_after_file_change(self) -> None:
+        """Force embedding rebuild on next prepare_sync (e.g. after hot reload from UI)."""
+        with self._lock:
+            self._mtime = -1.0
+
     def prepare_sync(self) -> None:
         """Refresh embeddings if snippet files changed. CPU/disk heavy — run off the event loop."""
         with self._lock:

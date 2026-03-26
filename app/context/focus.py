@@ -159,6 +159,12 @@ def activate_application(name: str, *, cmd_timeout: float = 2.5) -> bool:
     return False
 
 
+def layer_warrants_pre_inject_refocus(layer: str) -> bool:
+    """Refocus is only worth the AppleScript cost after L3 (user may have switched app while waiting)."""
+    ly = (layer or "").strip()
+    return ly.startswith("L3-")
+
+
 def refocus_if_needed_for_inject(*, captured_app: str, cmd_timeout: float = 1.25) -> None:
     """If the user switched away while the worker ran, bring the capture app forward before inject."""
     cap = (captured_app or "").strip()
