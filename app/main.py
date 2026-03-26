@@ -98,20 +98,24 @@ def main() -> None:
         service.prewarm_cache()
 
     if settings.startup_health_check:
-        from app.cli.l3_probe import startup_probe_for_run
 
-        probe_out, hints = startup_probe_for_run(settings)
-        n_fail = sum(1 for i in probe_out.issues if i.level == "fail")
-        n_warn = sum(1 for i in probe_out.issues if i.level == "warn")
-        LOG.info(
-            "L3 readiness probe provider=%s fails=%s warns=%s ollama_reachable=%s",
-            (settings.ai_provider or "ollama").strip().lower(),
-            n_fail,
-            n_warn,
-            probe_out.ollama_reachable,
-        )
-        for hint in hints:
-            LOG.warning("%s", hint)
+        def _run_probe() -> None:
+            from app.cli.l3_probe import startup_probe_for_run
+
+            probe_out, hints = startup_probe_for_run(settings)
+            n_fail = sum(1 for i in probe_out.issues if i.level == "fail")
+            n_warn = sum(1 for i in probe_out.issues if i.level == "warn")
+            LOG.info(
+                "L3 readiness probe provider=%s fails=%s warns=%s ollama_reachable=%s",
+                (settings.ai_provider or "ollama").strip().lower(),
+                n_fail,
+                n_warn,
+                probe_out.ollama_reachable,
+            )
+            for hint in hints:
+                LOG.warning("%s", hint)
+
+        threading.Thread(target=_run_probe, daemon=True, name="easify-probe").start()
 
     LOG.info(
         "Easify L0→L3 | provider=%s | cache_model=%s | tray=%s | palette=%s | context_words=%s",
@@ -203,6 +207,8 @@ def main() -> None:
                 undo_listener.stop()
             except Exception:
                 pass
+        if service.metrics is not None:
+            service.metrics.flush()
         service.cache.close()
 
 

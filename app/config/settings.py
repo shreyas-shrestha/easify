@@ -148,8 +148,9 @@ class Settings:
     cache_promote_max_keys: int = field(
         default_factory=lambda: max(0, min(100_000, int(_env("CACHE_PROMOTE_MAX_KEYS", "500"))))
     )
+    # Unused by current listener (immediate double-space capture); kept for config compatibility.
     double_space_settle_ms: int = field(
-        default_factory=lambda: max(0, min(500, int(_env("DOUBLE_SPACE_SETTLE_MS", "20"))))
+        default_factory=lambda: max(0, min(500, int(_env("DOUBLE_SPACE_SETTLE_MS", "0"))))
     )
 
     ollama_timeout_s: float = field(default_factory=lambda: float(_env("OLLAMA_TIMEOUT", "120")))

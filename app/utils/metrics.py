@@ -4,17 +4,22 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 from pathlib import Path
 from typing import Dict
 
+_FLUSH_INTERVAL_SEC = 5.0
+
 
 class Metrics:
-    """Thread-safe counters written to JSON (same directory as cache.db)."""
+    """Thread-safe counters; flushed to JSON at most every 5 s (or on close())."""
 
     def __init__(self, path: Path) -> None:
         self._path = path
         self._lock = threading.Lock()
         self._counts: Dict[str, int] = {}
+        self._dirty = False
+        self._last_flush: float = 0.0
         self._load()
 
     def incr(self, name: str, n: int = 1) -> None:
@@ -22,7 +27,15 @@ class Metrics:
             return
         with self._lock:
             self._counts[name] = self._counts.get(name, 0) + n
-            self._flush_unlocked()
+            self._dirty = True
+            if time.monotonic() - self._last_flush >= _FLUSH_INTERVAL_SEC:
+                self._flush_unlocked()
+
+    def flush(self) -> None:
+        """Explicit flush — call on shutdown."""
+        with self._lock:
+            if self._dirty:
+                self._flush_unlocked()
 
     def _load(self) -> None:
         if not self._path.is_file():
@@ -49,4 +62,9 @@ class Metrics:
     def _flush_unlocked(self) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         payload = {"counters": self._counts}
-        self._path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        self._path.write_text(
+            json.dumps(payload, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        self._last_flush = time.monotonic()
+        self._dirty = False

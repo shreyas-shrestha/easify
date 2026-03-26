@@ -52,6 +52,18 @@ def test_metrics_incr_persists(tmp_path: Path) -> None:
     from app.utils.metrics import Metrics
 
     mp = tmp_path / "metrics.json"
-    Metrics(mp).incr("live_replacements", 2)
+    m = Metrics(mp)
+    m.incr("live_replacements", 2)
+    m.flush()
     data = json.loads(mp.read_text(encoding="utf-8"))
     assert data["counters"]["live_replacements"] == 2
+
+
+def test_metrics_batch_flush(tmp_path: Path) -> None:
+    from app.utils.metrics import Metrics
+
+    mp = tmp_path / "m.json"
+    m = Metrics(mp)
+    m.incr("x", 1)
+    m.flush()
+    assert mp.is_file()

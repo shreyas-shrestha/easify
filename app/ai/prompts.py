@@ -49,6 +49,25 @@ EXPAND = (
     "Output ONLY the expanded text body—no preamble or quotes."
 )
 
+_RE_CONVERT_HINT = re.compile(
+    r"""
+    (?:
+      \b(?:convert|turn|change|what(?:'s|s|)\s+is)\b
+      | \b(?:how\s+(?:many|much|far))\b
+      | \d+\s*(?:km|mi|ft|lbs?|kg|g|oz|m|cm|mm|in|yd|
+                 mph|kph|celsius|fahrenheit|kelvin|
+                 litre|liter|gallon|pint|quart|cup|
+                 tbsp|tsp|acre|hectare|watt|volt|amp|
+                 byte|kb|mb|gb|tb)\b
+      | \b(?:to|into|in)\s+(?:km|mi|ft|lbs?|kg|g|oz|m|cm|mm|in|yd|
+                               mph|kph|celsius|fahrenheit|kelvin|
+                               metre|meter|litre|liter|gallon|pint|
+                               quart|byte|kilobyte|megabyte|gigabyte)\b
+    )
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
+
 
 def attach_context(
     base_system: str,
@@ -88,6 +107,8 @@ def classify(capture: str) -> tuple[str, str]:
         return t, CODE
     if low.startswith("expand ") or low.startswith("draft ") or low.startswith("meeting ") or low.startswith("agenda "):
         return t, EXPAND
+    if _RE_CONVERT_HINT.search(low):
+        return t, CONVERT
     if len(t.split()) <= 2 and not any(c in t for c in "/\\"):
         return t, DEFAULT
     return t, DEFAULT

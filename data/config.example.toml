@@ -62,4 +62,4 @@ metrics = false
 # ui_port = 8765
 # ui_secret_token = "generate-a-long-random-string"
 # cache_promote_max_keys = 500
-# double_space_settle_ms = 20
+# double_space_settle_ms = 0

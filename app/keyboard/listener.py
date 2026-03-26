@@ -176,14 +176,17 @@ class KeyboardListener:
             self._delete_n(2)
         finally:
             self._inject_depth -= 1
-        if self.settings.double_space_settle_ms > 0:
-            time.sleep(self.settings.double_space_settle_ms / 1000.0)
+        # Immediate state transition — blocking sleeps on this thread drop keystrokes.
+        # Legacy settle-after-delete (double_space_settle_ms) was removed; use app-side
+        # delays only if unavoidable.
         self._state = _STATE_CAPTURING
         self._capture.clear()
         self._trigger.reset()
         self._capture_from_prefix = False
         self._live_clear()
         self._dbl_armed = False
+        if self.debug:
+            LOG.debug("capture mode (double-space)")
         LOG.info("capture mode (double-space)")
 
     def _perform_live_replace(self, old_word: str, new_text: str) -> None:

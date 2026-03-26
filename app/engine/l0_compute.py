@@ -6,6 +6,7 @@ import ast
 import json
 import operator
 import re
+import threading
 import time
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
@@ -13,6 +14,22 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 import httpx
+
+_UREG = None
+_UREG_LOCK = threading.Lock()
+
+
+def _get_ureg():
+    global _UREG
+    if _UREG is not None:
+        return _UREG
+    with _UREG_LOCK:
+        if _UREG is None:
+            import pint as _pint
+
+            _UREG = _pint.UnitRegistry()
+    return _UREG
+
 
 _RE_UNIT = re.compile(
     r"^\s*(?:convert\s+)?(?P<qty>[-+]?(?:\d*\.\d+|\d+)(?:[eE][-+]?\d+)?)\s+"
@@ -24,6 +41,90 @@ _RE_FX = re.compile(
     r"(?P<fc>[A-Za-z]{3})\s+(?:to|into)\s+(?P<tc>[A-Za-z]{3})\s*$",
     re.I,
 )
+_CURRENCY_ALIASES: dict[str, str] = {
+    "dollar": "USD",
+    "dollars": "USD",
+    "usd": "USD",
+    "euro": "EUR",
+    "euros": "EUR",
+    "eur": "EUR",
+    "pound": "GBP",
+    "pounds": "GBP",
+    "sterling": "GBP",
+    "gbp": "GBP",
+    "yen": "JPY",
+    "jpy": "JPY",
+    "yuan": "CNY",
+    "renminbi": "CNY",
+    "cny": "CNY",
+    "franc": "CHF",
+    "francs": "CHF",
+    "chf": "CHF",
+    "rupee": "INR",
+    "rupees": "INR",
+    "inr": "INR",
+    "ruble": "RUB",
+    "rubles": "RUB",
+    "rub": "RUB",
+    "won": "KRW",
+    "krw": "KRW",
+    "real": "BRL",
+    "reais": "BRL",
+    "brl": "BRL",
+    "peso": "MXN",
+    "pesos": "MXN",
+    "mxn": "MXN",
+    "krona": "SEK",
+    "kronor": "SEK",
+    "sek": "SEK",
+    "krone": "NOK",
+    "nok": "NOK",
+    "dollar australian": "AUD",
+    "aud": "AUD",
+    "dollar canadian": "CAD",
+    "cad": "CAD",
+    "dirham": "AED",
+    "aed": "AED",
+    "lira": "TRY",
+    "try": "TRY",
+    "zloty": "PLN",
+    "pln": "PLN",
+    "forint": "HUF",
+    "huf": "HUF",
+    "baht": "THB",
+    "thb": "THB",
+    "ringgit": "MYR",
+    "myr": "MYR",
+    "shekel": "ILS",
+    "shekels": "ILS",
+    "ils": "ILS",
+}
+
+
+def _normalize_currency_aliases(s: str) -> str:
+    """Replace natural language currency names with ISO codes for FX regex."""
+    m = re.match(
+        r"^\s*(?:convert\s+)?(?P<amt>[-+]?(?:\d*\.\d+|\d+))\s+"
+        r"(?P<from>[A-Za-z]+)\s+(?:to|into)\s+(?P<to>[A-Za-z]+)\s*$",
+        s.strip(),
+        re.I,
+    )
+    if not m:
+        return s
+    amt_str = m.group("amt")
+    from_raw = m.group("from")
+    to_raw = m.group("to")
+    fk = from_raw.lower().rstrip("s")
+    tk = to_raw.lower().rstrip("s")
+    fc = _CURRENCY_ALIASES.get(fk, "")
+    tc = _CURRENCY_ALIASES.get(tk, "")
+    if not fc and not tc:
+        return s
+    fc = fc or (from_raw.upper() if len(from_raw) == 3 and from_raw.isalpha() else "")
+    tc = tc or (to_raw.upper() if len(to_raw) == 3 and to_raw.isalpha() else "")
+    if len(fc) != 3 or len(tc) != 3:
+        return s
+    return f"{amt_str} {fc} to {tc}"
 _RE_DATE_ADD = re.compile(
     r"^\s*(?P<base>today|yesterday|tomorrow|\d{4}-\d{2}-\d{2})\s*\+\s*"
     r"(?P<n>\d+)\s+(?P<u>days?|weeks?|hours?)\s*$",
@@ -51,9 +152,7 @@ def try_units(s: str) -> Optional[str]:
     if not m:
         return None
     try:
-        import pint
-
-        ureg = pint.UnitRegistry()
+        ureg = _get_ureg()
         q = float(m.group("qty")) * ureg(m.group("fu"))
         out = q.to(ureg(m.group("tu")))
         mag = out.magnitude
@@ -160,9 +259,7 @@ class FxRateCache:
     _loaded_at: float = field(default=0.0)
 
     def __post_init__(self) -> None:
-        import asyncio
-
-        self._conv_lock = asyncio.Lock()
+        self._conv_lock = threading.Lock()
 
     def _load_file(self) -> None:
         if not self.path.is_file():
@@ -175,7 +272,7 @@ class FxRateCache:
             self._mem = {}
 
     async def convert(self, client: httpx.AsyncClient, amount: float, frm: str, to: str) -> Optional[str]:
-        async with self._conv_lock:
+        with self._conv_lock:
             frm_u, to_u = frm.upper(), to.upper()
             if frm_u == to_u:
                 return f"{amount:g} {to_u}"
@@ -222,7 +319,8 @@ async def try_l0_async(capture: str, http: httpx.AsyncClient, fx: FxRateCache) -
     d = try_date_arithmetic(s)
     if d:
         return d, "L0-date"
-    fxm = _RE_FX.match(s)
+    s_fx = _normalize_currency_aliases(s)
+    fxm = _RE_FX.match(s_fx)
     if fxm:
         out = await fx.convert(http, float(fxm.group("amt")), fxm.group("fc"), fxm.group("tc"))
         if out:
