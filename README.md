@@ -3,9 +3,13 @@ Supercharge writing with llm-based text expansion anywhere you want to write, an
 
 Supercharge writing with LLM-based text expansion anywhere you type: clarification, spell-fix shortcuts, unit conversion, emoji, and semantic expansion — with **local Ollama**, **instant snippets**, **autocorrect**, and a **SQLite semantic cache**.
 
-**Defaults:** live autocorrect, fuzzy, cache, phrase buffer (2 words), double-space capture, background live-cache enrich, prewarm startup, L3 rolling context (8 words), semantic snippets (needs `pip install easify[semantic]` or it logs and skips), accessibility inject try-first (`easify[accessibility]` + OS permission), and clipboard restore are **on**. Turn pieces off with `EASIFY_*` or `config.toml` if you want a leaner setup. **Not** on by default: expansion preview (confirm each result), debug/metrics noise.
+**Defaults:** live autocorrect, fuzzy, cache, phrase buffer (2 words), **prefix** capture (`//`), background live-cache enrich, prewarm startup, L3 rolling context (8 words), semantic snippets (needs `pip install easify[semantic]` or it logs and skips), accessibility inject try-first (`easify[accessibility]` + OS permission), and clipboard restore are **on**. **Not** on by default: **double-space** capture (opt in via config/env; avoids accidental capture after sentence-ending spaces), expansion preview (confirm each result), debug/metrics noise.
 
-Type a **trigger** (default `//`), then your intent, then **close with the same delimiter again** (default `//…//`)—**or press Enter** to submit. **Double-space** or a **palette hotkey** also open capture. Expansion runs **in the background**: you can keep typing after the closing delimiter; when the result is ready, Easify deletes exactly **capture + what you typed since**, inserts **result + that tail**, so flow is not blocked waiting on the LLM. **Live** autocorrect/fuzzy replace is paused while a capture is in flight so the tail buffer stays consistent. Set `EASIFY_CAPTURE_CLOSE=` empty for **Enter-only** submit (legacy). A **tray icon** shows idle / expanding / error.
+Type a **trigger** (default `//`), then your intent, then **close with the same delimiter again** (default `//…//`)—**or press Enter** to submit. **Esc** cancels capture **without** submitting (no expansion runs). **Double-space** or a **palette hotkey** also open capture.
+
+The `//` prefix is ambiguous in normal text: **`https://`**, **`http://`**, **`file://`**, and **`ftp://`** are skipped when the trigger is the default `//` (recent keystrokes must end with `scheme:` immediately before the two slashes). Other cases—`//` in comments, Markdown, paths, or mid-word—can still open capture; change `EASIFY_TRIGGER` if that bites you often.
+
+Expansion runs **in the background**: you can keep typing after the closing delimiter; when the result is ready, Easify deletes exactly **capture + what you typed since**, inserts **result + that tail**, so flow is not blocked waiting on the LLM. **Caveat:** if you finish a **second** `//…//` capture (or overlap trigger typing) before the **first** job injects, tail keystrokes are serialized for one job at a time—very fast overlap can feel like “missing” keys until you see the first expansion land. **Live** autocorrect/fuzzy replace is paused while a capture is in flight so the tail buffer stays consistent. Set `EASIFY_CAPTURE_CLOSE=` empty for **Enter-only** submit (legacy). The **tray** icon tooltip shows status, **LLM cache model id**, expansion and enrich **queue depths**, **undo stack** depth, recent expansion (or error summary), and for failures a long **error + traceback** (truncated for OS limits). From the tray menu: **Copy last error** (full stored text to clipboard) and **Dismiss error** (return to idle without losing your last good expansion line).
 
 ## Architecture (multi-layer latency)
 
@@ -32,15 +36,15 @@ flowchart LR
 
 ### Activation (Phase 1)
 
-At least one must be enabled (defaults: **prefix on**, **double-space on**, palette off):
+At least one must be enabled (defaults: **prefix on**, **double-space off**, palette off):
 
 | Mode | Env | Notes |
 |------|-----|--------|
 | Prefix | `EASIFY_ACTIVATION_PREFIX=1` (default) | Requires `EASIFY_TRIGGER` (default `//`) and optional `EASIFY_CAPTURE_CLOSE` (default `//`) |
-| Double-space | `EASIFY_ACTIVATION_DOUBLE_SPACE=1` (default) | Second **Space** within `EASIFY_DOUBLE_SPACE_WINDOW_MS` (default 400 ms) opens capture; two spaces are deleted |
+| Double-space | `EASIFY_ACTIVATION_DOUBLE_SPACE=1` (**opt in**) | Second **Space** within `EASIFY_DOUBLE_SPACE_WINDOW_MS` (default 400 ms) opens capture; two spaces are deleted — off by default so sentence spacing does not open capture |
 | Palette | `EASIFY_PALETTE_HOTKEY='<ctrl>+<shift>+e>'` | pynput `GlobalHotKeys` grammar; opens a small **tkinter** window to type intent (no prefix) |
 
-**Tray:** `EASIFY_TRAY=1` (default) — **pystray** + **Pillow**; Quit stops the listener. Disable with `EASIFY_TRAY=0` on headless servers.
+**Tray:** `EASIFY_TRAY=1` (default) — **pystray** + **Pillow**; tooltip shows model, queue depths, undo stack size, and expanded error text; menu: **Copy last error**, **Dismiss error**, **Quit**. Disable with `EASIFY_TRAY=0` on headless servers.
 
 **Injection target:** While you wait for L0/L3, macOS may focus **Terminal** (or another window). Easify records the frontmost app when you **finish** the capture and calls **Activate** right before inject (`EASIFY_PRE_INJECT_REFOCUS=1`, default). If Notes still ignores synthetic typing, try `EASIFY_INJECT_TYPE_FIRST=0` (clipboard paste). **Parallel tail:** after you keep typing while a capture resolves, Easify waits **`EASIFY_INJECT_SETTLE_MS`** (default 55 ms) after your last key before inject. It then **moves the caret left** across that tail, **deletes only** `//…//`, and types the **result** — your sentence is **not** backspaced away first (set `EASIFY_INJECT_TAIL_CURSOR_LEFT=0` to restore the legacy delete-through-tail behavior if an app mis-handles arrow keys).
 
@@ -54,8 +58,8 @@ At least one must be enabled (defaults: **prefix on**, **double-space on**, pale
 | **Rolling words** | `EASIFY_CONTEXT_BUFFER_WORDS=N` (default `8`): last *N* space-delimited tokens fed into the L3 system prompt |
 | **AI provider** | `EASIFY_AI_PROVIDER=ollama` (default) \| `openai` \| `anthropic`; keys `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`; models `EASIFY_OPENAI_MODEL`, `EASIFY_ANTHROPIC_MODEL` |
 | **Expansion preview** | `EASIFY_EXPANSION_PREVIEW=1`: tkinter accept/cancel before inject |
-| **Keyboard backend** | `EASIFY_BACKEND=pynput` (default) \| `keyboard` (optional `pip install easify[keyboard]`) \| `evdev` + `EASIFY_EVDEV_DEVICE=/dev/input/eventN` (`pip install easify[evdev]`, often requires permissions) |
-| **Accessibility inject** | `EASIFY_INJECT_ACCESSIBILITY=1` (default) + `pip install easify[accessibility]` — find the last `//capture//` in the **focused** control’s string and replace it in one write (macOS `AXValue`, Windows `ValuePattern`). **No synthetic keys** on success. **Caret/selection** after `SetValue` is up to each app (not always preserved). Enable **Accessibility** for the process running Easify on macOS. If the substring is missing or the API fails, Easify **falls back** to the normal keystroke inject path. |
+| **Keyboard backend** | `EASIFY_BACKEND=pynput` (default) \| `keyboard` (optional `pip install easify[keyboard]`) \| `evdev` + `EASIFY_EVDEV_DEVICE=/dev/input/eventN` (`pip install easify[evdev]`, often requires permissions). With the `keyboard` backend, **Esc** is forwarded to the listener (same as pynput) so capture cancel works. |
+| **Accessibility inject** | `EASIFY_INJECT_ACCESSIBILITY=1` (default) + `pip install easify[accessibility]` — replace the capture span in the **focused** control’s string in one write (default **last** match; `EASIFY_INJECT_ACCESSIBILITY_MATCH_LAST=0` for **first**) (macOS `AXValue`, Windows `ValuePattern`). **No synthetic keys** on success. **Caret/selection** after `SetValue` is up to each app (not always preserved). Enable **Accessibility** for the process running Easify on macOS. If the substring is missing or the API fails, Easify **falls back** to the normal keystroke inject path. |
 
 Cache keys for **contextual** L3 rows include the augmented system string (app + prior words). Snippet / fuzzy / context-free cache behavior is unchanged.
 
@@ -70,7 +74,7 @@ Cache keys for **contextual** L3 rows include the augmented system string (app +
 | **Promotion cap** | `EASIFY_CACHE_PROMOTE_MAX_KEYS` (default `500`, `0` = unlimited) stops unbounded `promoted-*` growth |
 | **Double-space timing** | `EASIFY_DOUBLE_SPACE_SETTLE_MS` (default `20`): brief pause after deleting the two spaces before capture mode so focused apps can process backspaces (pynput race mitigation) |
 | **Live enrich** | Ultra-common words are skipped via `app/bundled/live_enrich_blocklist.txt` (no config knob) |
-| **Undo last expansion** | `EASIFY_UNDO_HOTKEY='<ctrl>+<shift>+z>'` — removes the injected text and restores the captured trigger + intent when possible; palette expansions (`delete_count=0`) delete only the injected text |
+| **Undo expansions** | `EASIFY_UNDO_HOTKEY='<ctrl>+<shift>+z>'` — **LIFO stack** (default depth `EASIFY_UNDO_STACK_MAX=32`): each successful injection pushes a step; undo pops the most recent. A failed undo **does not** drop the frame (retry the hotkey after fixing focus / permissions). Palette expansions (`delete_count=0`) delete only the injected text |
 
 ## Doctor & autostart
 
@@ -138,7 +142,8 @@ See `data/config.example.toml` in the repo.
 | Variable | Meaning |
 |----------|---------|
 | `EASIFY_ACTIVATION_PREFIX` | `1` = type `EASIFY_TRIGGER` to capture (default) |
-| `EASIFY_ACTIVATION_DOUBLE_SPACE` | `1` = double-space opens capture (default); set `0` to disable |
+| `EASIFY_ACTIVATION_DOUBLE_SPACE` | `1` = double-space opens capture (**opt in**; default **off**) |
+| `EASIFY_UNDO_STACK_MAX` | Max remembered undo steps (default `32`, capped 256) |
 | `EASIFY_DOUBLE_SPACE_WINDOW_MS` | Max gap between spaces (default `400`) |
 | `EASIFY_PALETTE_HOTKEY` | e.g. `<ctrl>+<shift>+e>` — floating palette |
 | `EASIFY_CAPTURE_MAX_CHARS` | Max captured intent length (default `4000`) |

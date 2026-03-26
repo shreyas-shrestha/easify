@@ -39,7 +39,7 @@ class Settings:
     trigger: str = field(default_factory=lambda: _env("TRIGGER", "//"))
     capture_close: str = field(default_factory=lambda: _env("CAPTURE_CLOSE", "//").strip())
     use_prefix_trigger: bool = field(default_factory=lambda: _env_bool("ACTIVATION_PREFIX", True))
-    double_space_activation: bool = field(default_factory=lambda: _env_bool("ACTIVATION_DOUBLE_SPACE", True))
+    double_space_activation: bool = field(default_factory=lambda: _env_bool("ACTIVATION_DOUBLE_SPACE", False))
     double_space_window_ms: int = field(
         default_factory=lambda: max(100, min(3000, int(_env("DOUBLE_SPACE_WINDOW_MS", "400"))))
     )
@@ -128,6 +128,10 @@ class Settings:
     inject_tail_via_cursor_left: bool = field(default_factory=lambda: _env_bool("INJECT_TAIL_CURSOR_LEFT", True))
     # macOS AX / Windows UIA: swap capture substring in focused field (pip install easify[accessibility]).
     inject_via_accessibility: bool = field(default_factory=lambda: _env_bool("INJECT_ACCESSIBILITY", True))
+    # True = replace last occurrence (rfind); False = first (find) when the capture text appears more than once.
+    inject_accessibility_match_last: bool = field(
+        default_factory=lambda: _env_bool("INJECT_ACCESSIBILITY_MATCH_LAST", True)
+    )
     metrics_enabled: bool = field(default_factory=lambda: _env_bool("METRICS", False))
 
     backend: str = field(default_factory=lambda: _env("BACKEND", "pynput"))
@@ -155,6 +159,9 @@ class Settings:
     )
     cache_promote_sources: str = field(default_factory=lambda: _env("CACHE_PROMOTE_SOURCES", "ai,bg").strip())
     undo_hotkey: str = field(default_factory=lambda: _env("UNDO_HOTKEY", "").strip())
+    undo_stack_max: int = field(
+        default_factory=lambda: max(1, min(256, int(_env("UNDO_STACK_MAX", "32"))))
+    )
     ui_host: str = field(default_factory=lambda: _env("UI_HOST", "127.0.0.1").strip() or "127.0.0.1")
     ui_port: int = field(default_factory=lambda: max(1, min(65535, int(_env("UI_PORT", "8765")))))
     ui_secret_token: str = field(default_factory=lambda: _env("UI_SECRET_TOKEN", "").strip())

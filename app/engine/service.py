@@ -6,6 +6,7 @@ import asyncio
 import re
 import threading
 import time
+import traceback
 from collections import deque
 from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
@@ -47,6 +48,17 @@ class UndoFrame:
     restore: str
     # True when expansion used OS accessibility string swap (undo uses same path).
     via_accessibility: bool = False
+
+
+@dataclass(frozen=True)
+class TraySnapshot:
+    status: str
+    detail: str
+    error: str
+    model: str
+    expansion_queued: int
+    enrich_queued: int
+    undo_depth: int
 
 
 @dataclass(frozen=True)
@@ -111,12 +123,13 @@ class ExpansionService:
         self._tray_lock = threading.Lock()
         self._tray_status = "idle"
         self._tray_detail = ""
+        self._tray_last_success_detail = ""
         self._tray_last_error = ""
         self._delete_fn: Optional[Callable[[int], None]] = None
         self._paste_fn: Optional[Callable[[str], None]] = None
         self._type_fn: Optional[Callable[[str], None]] = None
         self._cursor_left_fn: Optional[Callable[[int], None]] = None
-        self._undo: Optional[UndoFrame] = None
+        self._undo_stack: deque[UndoFrame] = deque()
         self._undo_lock = threading.Lock()
         self._pending_tails: deque[_PendingExpansionTail] = deque()
         self._pending_tail_lock = threading.Lock()
@@ -180,24 +193,28 @@ class ExpansionService:
         if not injected:
             return
         with self._undo_lock:
-            self._undo = UndoFrame(
-                injected=injected,
-                restore=restore,
-                via_accessibility=via_accessibility,
+            self._undo_stack.append(
+                UndoFrame(
+                    injected=injected,
+                    restore=restore,
+                    via_accessibility=via_accessibility,
+                )
             )
+            cap = max(1, self.settings.undo_stack_max)
+            while len(self._undo_stack) > cap:
+                self._undo_stack.popleft()
 
-    def try_undo(self) -> bool:
-        with self._undo_lock:
-            frame = self._undo
-            self._undo = None
-        if frame is None:
-            return False
+    def _undo_apply_frame(self, frame: UndoFrame) -> bool:
         if frame.via_accessibility:
             from app.inject.accessibility import replace_in_focused_field
 
             with self._inject_lock:
                 try:
-                    ok = replace_in_focused_field(old=frame.injected, new=frame.restore or "")
+                    ok = replace_in_focused_field(
+                        old=frame.injected,
+                        new=frame.restore or "",
+                        match_last=self.settings.inject_accessibility_match_last,
+                    )
                     if ok and self.metrics is not None:
                         self.metrics.incr("undo_expansions")
                     return ok
@@ -230,6 +247,17 @@ class ExpansionService:
                 LOG.warning("undo failed: %s", e)
                 return False
 
+    def try_undo(self) -> bool:
+        with self._undo_lock:
+            if not self._undo_stack:
+                return False
+            frame = self._undo_stack.pop()
+        ok = self._undo_apply_frame(frame)
+        if not ok:
+            with self._undo_lock:
+                self._undo_stack.append(frame)
+        return ok
+
     def set_inject(
         self,
         delete_fn: Callable[[int], None],
@@ -246,28 +274,53 @@ class ExpansionService:
     def inject_lock(self) -> threading.Lock:
         return self._inject_lock
 
-    def tray_snapshot(self) -> tuple[str, str, str]:
+    def tray_snapshot(self) -> TraySnapshot:
+        exp_q = self._queue.qsize() if self._queue is not None else 0
+        enr_q = self._enrich_queue.qsize() if self._enrich_queue is not None else 0
+        model = self.cache_model_id
         with self._tray_lock:
-            return self._tray_status, self._tray_detail, self._tray_last_error
+            st = self._tray_status
+            det = self._tray_detail
+            err = self._tray_last_error
+        with self._undo_lock:
+            udepth = len(self._undo_stack)
+        return TraySnapshot(
+            status=st,
+            detail=det,
+            error=err,
+            model=model,
+            expansion_queued=exp_q,
+            enrich_queued=enr_q,
+            undo_depth=udepth,
+        )
 
     def tray_set_thinking(self, preview: str = "") -> None:
         with self._tray_lock:
             self._tray_status = "thinking"
-            self._tray_detail = preview[:120]
+            self._tray_detail = preview[:220]
             self._tray_last_error = ""
 
     def tray_set_idle(self, last_expansion: str = "") -> None:
         with self._tray_lock:
             self._tray_status = "idle"
             self._tray_detail = last_expansion[:220]
+            self._tray_last_success_detail = self._tray_detail
             self._tray_last_error = ""
 
     def tray_set_error(self, message: str) -> None:
         with self._tray_lock:
             self._tray_status = "error"
-            self._tray_last_error = message[:500]
-            if message:
-                self._tray_detail = message[:120]
+            self._tray_last_error = (message or "")[:8000]
+            self._tray_detail = (message or "")[:500]
+
+    def tray_clear_error(self) -> None:
+        """Clear error state from the tray after the user has read or copied the message."""
+        with self._tray_lock:
+            if self._tray_status != "error":
+                return
+            self._tray_status = "idle"
+            self._tray_last_error = ""
+            self._tray_detail = self._tray_last_success_detail
 
     @property
     def cache_model_id(self) -> str:
@@ -474,7 +527,8 @@ class ExpansionService:
                 await asyncio.to_thread(self._apply_replacement, job, outcome.text, outcome.layer)
             except Exception as e:
                 self._discard_pending_tail(job)
-                self.tray_set_error(str(e))
+                lump = f"{e}\n{traceback.format_exc()}"
+                self.tray_set_error(lump)
                 LOG.exception("expansion failed: %s", e)
 
     def _wait_tail_quiet(self, job: ExpansionJob) -> None:
@@ -520,7 +574,11 @@ class ExpansionService:
                 if self.settings.inject_via_accessibility and capture_span:
                     from app.inject.accessibility import replace_in_focused_field
 
-                    if replace_in_focused_field(old=capture_span, new=text):
+                    if replace_in_focused_field(
+                        old=capture_span,
+                        new=text,
+                        match_last=self.settings.inject_accessibility_match_last,
+                    ):
                         injected_ok = True
                         to_inject = text
                         undo_restore = capture_span

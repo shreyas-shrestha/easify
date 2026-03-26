@@ -52,6 +52,7 @@ class KeyboardListener:
         self._dbl_armed = False
         self._dbl_last_mono = 0.0
         self._close_matcher: Optional[CloseDelimiterMatcher] = None
+        self._recent_chars: deque[str] = deque(maxlen=16)
 
         self._rolling_words: Optional[deque[str]] = (
             deque(maxlen=settings.context_buffer_words) if settings.context_buffer_words > 0 else None
@@ -211,6 +212,27 @@ class KeyboardListener:
             return
         self._live_clear()
 
+    def _cancel_capture(self) -> None:
+        """Exit capture mode without submitting (document unchanged beyond what user typed)."""
+        if self._close_matcher is not None:
+            self._close_matcher.reset()
+        self._close_matcher = None
+        self._capture.clear()
+        self._trigger.reset()
+        self._capture_from_prefix = False
+        self._state = _STATE_IDLE
+        LOG.info("capture cancelled (Esc) — not submitted")
+
+    def _suppress_capture_for_url_scheme_slash_slash(self) -> bool:
+        """Avoid treating // in https://, http://, file://, ftp:// as the capture trigger."""
+        if self.trigger != "//":
+            return False
+        s = "".join(self._recent_chars)
+        if len(s) < 2 or not s.endswith("//"):
+            return False
+        pre = s[:-2]
+        return pre.endswith(("http:", "https:", "file:", "ftp:"))
+
     def _submit_capture(self, *, entered_with_newline: bool) -> None:
         raw = self._capture.text()
         run_prompt = raw.strip()
@@ -345,12 +367,18 @@ class KeyboardListener:
             return
         if self.service.inject_lock.locked():
             return
-        if pynput_skip_key(key):
+        if pynput_skip_key(key, capture_active=(self._state == _STATE_CAPTURING)):
             return
 
         ch = pynput_key_char(key)
 
+        if self._state == _STATE_IDLE and ch is not None and len(ch) == 1:
+            self._recent_chars.append(ch)
+
         if self._state == _STATE_CAPTURING:
+            if key == Key.esc:
+                self._cancel_capture()
+                return
             if key in (Key.enter, getattr(Key, "kp_enter", Key.enter)):
                 self._submit_capture(entered_with_newline=True)
                 return
@@ -386,6 +414,9 @@ class KeyboardListener:
             if self.settings.use_prefix_trigger and self.trigger:
                 completed = self._trigger.try_advance(ch, self.trigger)
                 if completed:
+                    if self._suppress_capture_for_url_scheme_slash_slash():
+                        LOG.debug("skip capture: // is part of http(s): / file: / ftp: URL")
+                        return
                     if self.debug:
                         LOG.debug("capture mode on (prefix)")
                     self._state = _STATE_CAPTURING
@@ -432,6 +463,9 @@ class KeyboardListener:
         if self.settings.use_prefix_trigger and self.trigger:
             completed = self._trigger.try_advance(ch, self.trigger)
             if completed:
+                if self._suppress_capture_for_url_scheme_slash_slash():
+                    LOG.debug("skip capture: // is part of http(s): / file: / ftp: URL")
+                    return
                 if self.debug:
                     LOG.debug("capture mode on (prefix)")
                 self._state = _STATE_CAPTURING

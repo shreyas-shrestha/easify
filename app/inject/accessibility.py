@@ -19,23 +19,23 @@ def accessibility_deps_hint() -> Optional[str]:
     return None
 
 
-def replace_in_focused_field(*, old: str, new: str) -> bool:
+def replace_in_focused_field(*, old: str, new: str, match_last: bool = True) -> bool:
     """
-    Replace the last occurrence of ``old`` in the focused text field's value.
+    Replace ``old`` with ``new`` in the focused text field (``match_last``: rfind vs find).
     Does not synthesize keys. Requires OS accessibility permissions (macOS) / UIAccess (Win).
     """
-    old_s = (old or "").strip()
+    old_s = old or ""
     if not old_s:
         return False
     try:
         if sys.platform == "darwin":
             from app.inject.ax_macos import replace_substring_in_focused_element
 
-            return replace_substring_in_focused_element(old_s, new)
+            return replace_substring_in_focused_element(old_s, new, match_last=match_last)
         if sys.platform == "win32":
             from app.inject.uia_windows import replace_substring_in_focused_element
 
-            return replace_substring_in_focused_element(old_s, new)
+            return replace_substring_in_focused_element(old_s, new, match_last=match_last)
     except ImportError as e:
         LOG.debug("accessibility inject: import error %s", e)
     except Exception as e:

@@ -2,12 +2,14 @@
 # Or set EASIFY_CONFIG=/path/to/this/file
 # Env vars (EASIFY_*) always override these values.
 #
-# Built-in defaults aim to keep features ON (live autocorrect, double-space capture,
-# semantic snippets, accessibility inject try-first, enrich, prewarm, etc.). Use this
+# Built-in defaults aim to keep features ON (live autocorrect, prefix capture, semantic
+# snippets, accessibility inject try-first, enrich, prewarm, etc.). Double-space capture
+# is OFF unless you opt in. Use this
 # file to turn things off or tune them.
 
 activation_prefix = true
-activation_double_space = true
+# Double-space capture: off by default (sentence-spacing). Opt in explicitly:
+# activation_double_space = true
 # double_space_window_ms = 400
 # palette_hotkey = "<ctrl>+<shift>+e>"
 # tray = true
@@ -34,6 +36,8 @@ live_cache_enrich = true
 perf = false
 inject_prefer_type = true
 inject_via_accessibility = true
+# AX/UIA replace: true = last occurrence (rfind), false = first occurrence (find) when text repeats in field.
+# inject_accessibility_match_last = true
 clipboard_restore = true
 metrics = false
 
@@ -65,6 +69,7 @@ snippet_namespace_lenient = true
 # cache_promote_min_hits = 0
 # cache_promote_sources = "ai,bg"
 # undo_hotkey = ""
+# undo_stack_max = 32
 # ui_host = "127.0.0.1"
 # ui_port = 8765
 # ui_secret_token = "generate-a-long-random-string"

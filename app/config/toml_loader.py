@@ -215,6 +215,11 @@ def apply_toml_to_settings(obj: Any, data: Mapping[str, Any]) -> None:
         "EASIFY_INJECT_ACCESSIBILITY",
         key="inject_via_accessibility",
     )
+    take_bool(
+        "inject_accessibility_match_last",
+        "EASIFY_INJECT_ACCESSIBILITY_MATCH_LAST",
+        key="inject_accessibility_match_last",
+    )
 
     take_bool("semantic_snippets", "EASIFY_SEMANTIC_SNIPPETS", key="semantic_snippets")
     take_str("semantic_model", "EASIFY_SEMANTIC_MODEL", key="semantic_model")
@@ -233,6 +238,7 @@ def apply_toml_to_settings(obj: Any, data: Mapping[str, Any]) -> None:
     )
     take_str("cache_promote_sources", "EASIFY_CACHE_PROMOTE_SOURCES", key="cache_promote_sources")
     take_str("undo_hotkey", "EASIFY_UNDO_HOTKEY", key="undo_hotkey")
+    take_int("undo_stack_max", "EASIFY_UNDO_STACK_MAX", key="undo_stack_max", lo=1, hi=256)
     take_str("ui_host", "EASIFY_UI_HOST", key="ui_host")
     take_int("ui_port", "EASIFY_UI_PORT", key="ui_port", lo=1, hi=65535)
     take_str("ui_secret_token", "EASIFY_UI_SECRET_TOKEN", key="ui_secret_token")

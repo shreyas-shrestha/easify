@@ -32,7 +32,6 @@ _SKIP = frozenset(
         "left command",
         "right command",
         "caps lock",
-        "esc",
     }
 )
 
@@ -64,6 +63,9 @@ def run_keyboard_hook_blocking(listener: "KeyboardListener", stop: threading.Eve
             return
         if name == "tab":
             listener._on_press(Key.tab)
+            return
+        if name == "esc":
+            listener._on_press(Key.esc)
             return
         if len(name) == 1:
             class _K:

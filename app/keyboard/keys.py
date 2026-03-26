@@ -21,12 +21,14 @@ def pynput_key_char(key: Any) -> Optional[str]:
     return None
 
 
-def pynput_skip_key(key: Any) -> bool:
+def pynput_skip_key(key: Any, *, capture_active: bool = False) -> bool:
     from pynput.keyboard import Key
 
     skips = (
         Key.shift, Key.shift_l, Key.shift_r, Key.ctrl, Key.ctrl_l, Key.ctrl_r,
         Key.alt, Key.alt_l, Key.alt_r, Key.cmd, Key.cmd_l, Key.cmd_r,
-        Key.caps_lock, Key.esc,
+        Key.caps_lock,
     )
+    if not capture_active and key == Key.esc:
+        return True
     return key in skips

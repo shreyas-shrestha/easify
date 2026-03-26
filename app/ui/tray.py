@@ -9,9 +9,11 @@ from typing import TYPE_CHECKING, Callable, Optional
 from app.utils.log import get_logger
 
 if TYPE_CHECKING:
-    from app.engine.service import ExpansionService
+    from app.engine.service import ExpansionService, TraySnapshot
 
 LOG = get_logger(__name__)
+
+_MAX_TOOLTIP_CHARS = 1800
 
 
 def _icon_image(state: str):
@@ -30,6 +32,28 @@ def _icon_image(state: str):
     return img
 
 
+def _format_tooltip(snap: "TraySnapshot") -> str:
+    lines = [
+        f"Easify — {snap.status}",
+        f"Model: {snap.model}",
+        f"Queued: {snap.expansion_queued} expansion | {snap.enrich_queued} enrich",
+        f"Undo stack: {snap.undo_depth}",
+    ]
+    if snap.status == "error" and snap.detail:
+        lines.append(f"Summary: {snap.detail[:600]}")
+    elif snap.detail:
+        lines.append(f"Last expansion: {snap.detail[:600]}")
+    if snap.error:
+        body = snap.error.strip()
+        if len(body) > 1400:
+            body = body[:1397] + "…"
+        lines.append("Error / traceback:\n" + body)
+    out = "\n".join(lines)
+    if len(out) > _MAX_TOOLTIP_CHARS:
+        return out[: _MAX_TOOLTIP_CHARS - 1] + "…"
+    return out
+
+
 def run_tray_app(
     service: "ExpansionService",
     stop: threading.Event,
@@ -44,21 +68,30 @@ def run_tray_app(
         LOG.warning("install pystray + Pillow for tray: pip install pystray Pillow")
         return
 
-    icon_ref: list = []
+    def copy_last_error(_icon, _item) -> None:
+        from app.utils import clipboard as cb
 
-    def snapshot_title() -> str:
-        st, detail, err = service.tray_snapshot()
-        if err and st == "error":
-            return f"Easify — error: {err[:100]}"
-        if detail:
-            return f"Easify — {st}: {detail[:100]}"
-        return f"Easify — {st}"
+        snap = service.tray_snapshot()
+        if snap.error:
+            try:
+                cb.set_clipboard(snap.error)
+                LOG.info("copied tray error to clipboard (%s chars)", len(snap.error))
+            except Exception as e:
+                LOG.warning("clipboard copy failed: %s", e)
+
+    def dismiss_error(_icon, _item) -> None:
+        service.tray_clear_error()
 
     def _quit(icon, _item) -> None:
         on_quit()
         icon.stop()
 
-    menu = Menu(MenuItem("Quit", _quit))
+    menu = Menu(
+        MenuItem("Copy last error (full text)", copy_last_error),
+        MenuItem("Dismiss error / reset tray to idle", dismiss_error),
+        Menu.SEPARATOR,
+        MenuItem("Quit", _quit),
+    )
     icon = pystray.Icon("Easify", _icon_image("idle"), title="Easify", menu=menu)
     icon_ref.append(icon)
     if icon_holder is not None:
@@ -69,14 +102,14 @@ def run_tray_app(
         last_state = ""
         last_title = ""
         while not stop.is_set():
-            st, _, _ = service.tray_snapshot()
-            if st != last_state:
-                last_state = st
+            snap = service.tray_snapshot()
+            if snap.status != last_state:
+                last_state = snap.status
                 try:
-                    icon.icon = _icon_image(st)
+                    icon.icon = _icon_image(snap.status)
                 except Exception:
                     pass
-            title = snapshot_title()
+            title = _format_tooltip(snap)
             if title != last_title:
                 last_title = title
                 try:

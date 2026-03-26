@@ -101,7 +101,7 @@ def _find_editable_value(elem: Optional[Any]) -> Tuple[Optional[Any], Optional[s
     return None, None
 
 
-def replace_substring_in_focused_element(old: str, new: str) -> bool:
+def replace_substring_in_focused_element(old: str, new: str, *, match_last: bool = True) -> bool:
     focused = _focused_element()
     if focused is None:
         LOG.debug("AX: no focused UI element")
@@ -110,7 +110,7 @@ def replace_substring_in_focused_element(old: str, new: str) -> bool:
     if not elem or cur is None:
         LOG.debug("AX: could not read editable value from focus chain")
         return False
-    idx = cur.rfind(old)
+    idx = cur.rfind(old) if match_last else cur.find(old)
     if idx < 0:
         LOG.debug("AX: capture substring not found in field (len=%s)", len(cur))
         return False

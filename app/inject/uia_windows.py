@@ -11,7 +11,7 @@ from app.utils.log import get_logger
 LOG = get_logger(__name__)
 
 
-def replace_substring_in_focused_element(old: str, new: str) -> bool:
+def replace_substring_in_focused_element(old: str, new: str, *, match_last: bool = True) -> bool:
     import uiautomation as auto
 
     c = auto.GetFocusedControl()
@@ -29,7 +29,7 @@ def replace_substring_in_focused_element(old: str, new: str) -> bool:
         cur = vp.Value or ""
     except Exception:
         cur = ""
-    idx = cur.rfind(old)
+    idx = cur.rfind(old) if match_last else cur.find(old)
     if idx < 0:
         LOG.debug("UIA: capture substring not found (len=%s)", len(cur))
         return False
