@@ -105,4 +105,8 @@ def test_cache_service_facade(tmp_path) -> None:
     assert text == "answer"
     assert hits >= 1
     assert src == "ai"
+    cs.store_live_enrich("model-a", "prompt-y", "enriched")
+    assert cs.lookup_live("model-a", "prompt-y") == "enriched"
+    _, _, src2 = cs.lookup_capture("model-a", "prompt-y")
+    assert src2 == "bg"
     store.close()

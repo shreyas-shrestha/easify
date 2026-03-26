@@ -30,6 +30,7 @@ from app.engine.l0_compute import FxRateCache
 from app.engine.live_word import live_cache_prompt
 from app.engine.pending_tail import PendingExpansionTail
 from app.engine.preview_gate import resolve_capture_preview_async
+from app.pipelines.capture_pipeline import run_capture_expand_async
 from app.engine.pipeline import ExpansionPipeline
 from app.engine.tray_controller import TrayController
 from app.engine.types import ExpansionJob, LiveEnrichJob, TraySnapshot, UndoFrame
@@ -509,51 +510,53 @@ class ExpansionService:
                     clip_snippet = prompts.sanitize_clipboard_context(
                         raw, self.settings.context_clipboard_max_chars
                     )
-                outcome = await self.pipeline.expand(
+                cap = await run_capture_expand_async(
+                    self.pipeline,
                     job.capture,
                     client,
                     focused_app=focused,
-                    prior_words=job.prior_words,
+                    prior_words=job.prior_words or "",
                     clipboard_snippet=clip_snippet,
+                    citation_mode=False,
                 )
                 self._consume_consecutive_failures = 0
-                journal_layer = outcome.layer
-                journal_text = outcome.text or ""
-                if not outcome.text:
+                journal_layer = cap.source
+                journal_text = cap.text or ""
+                if not cap.text:
                     self._discard_pending_tail(job)
-                    LOG.warning("empty expansion result (%s)", outcome.layer)
-                    self.tray_set_error(f"empty result ({outcome.layer})")
+                    LOG.warning("empty expansion result (%s)", cap.source)
+                    self.tray_set_error(f"empty result ({cap.source})")
                     self._journal_expansion(
                         job,
-                        layer=outcome.layer,
+                        layer=cap.source,
                         result_text="",
                         ok=False,
                         error="empty expansion",
                     )
                     continue
-                result_preview = outcome.text
+                result_preview = cap.text
                 short = result_preview if len(result_preview) <= 100 else result_preview[:97] + "…"
                 self.tray_set_idle(short)
-                preview_act = await resolve_capture_preview_async(self.settings, outcome.text)
+                preview_act = await resolve_capture_preview_async(self.settings, cap.text)
                 if preview_act.type == ActionType.NOOP:
                     self._discard_pending_tail(job)
                     self.tray_set_idle("preview cancelled")
                     self._journal_expansion(
                         job,
-                        layer=outcome.layer,
-                        result_text=outcome.text,
+                        layer=cap.source,
+                        result_text=cap.text,
                         ok=False,
                         error="preview cancelled",
                     )
                     continue
-                inject_text = preview_act.text or outcome.text
+                inject_text = preview_act.text or cap.text
                 await self._wait_tail_quiet_async(job)
                 inject_kind = await asyncio.to_thread(
-                    self._apply_replacement, job, inject_text, outcome.layer
+                    self._apply_replacement, job, inject_text, cap.source
                 )
                 self._journal_expansion(
                     job,
-                    layer=outcome.layer,
+                    layer=cap.source,
                     result_text=inject_text,
                     ok=bool(inject_kind),
                     error="" if inject_kind else "inject did not complete",

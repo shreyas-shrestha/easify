@@ -28,6 +28,10 @@ class CacheService:
     def store_ai_result(self, model: str, prompt: str, response: str, *, source: str = "ai") -> None:
         self._store.put(model, prompt, response, source=source)
 
+    def store_live_enrich(self, model: str, prompt: str, response: str) -> None:
+        """Background live-cache enrichment (distinct source for stats/promotion rules)."""
+        self._store.put(model, prompt, response, source="bg")
+
     def lookup(self, model: str, prompt: str) -> tuple[Optional[str], int, str]:
         return self._store.lookup(model, prompt)
 
