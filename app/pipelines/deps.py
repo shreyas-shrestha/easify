@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Protocol, Union
+from typing import TYPE_CHECKING, Protocol
 
 from app.cache.service import CacheService
-from app.cache.store import SqliteExpansionCache
 
 if TYPE_CHECKING:
     from app.autocorrect.engine import AutocorrectEngine
@@ -25,9 +24,6 @@ class CapturePipelineDeps(Protocol):
     pass
 
 
-CacheLike = Union[SqliteExpansionCache, CacheService]
-
-
 class DefaultLivePipelineDeps:
     """Wiring for production: wraps resolve_live_word_detail / phrase."""
 
@@ -36,7 +32,7 @@ class DefaultLivePipelineDeps:
         *,
         autoc: "AutocorrectEngine",
         snippets: "SnippetEngine",
-        cache: "CacheLike",
+        cache: CacheService,
         model: str,
         min_word_len: int,
         fuzzy_enabled: bool,

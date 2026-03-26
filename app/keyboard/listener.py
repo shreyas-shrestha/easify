@@ -16,7 +16,6 @@ from pynput.keyboard import Controller, Key, Listener
 from app.config.settings import Settings
 from app.context.focus import get_focused_app_name_fresh
 from app.engine.buffer import CaptureBuffer, TriggerState
-from app.engine.events import CaptureSubmitPayload, EngineEvent, EngineEventType, LivePhrasePayload, LiveWordPayload
 from app.keyboard import buffer as input_buffer
 from app.engine.guards import is_safe_phrase_tokens, is_safe_word, text_suggests_ime_mid_composition
 from app.engine.live_word import LiveFixCooldown, LiveWordResolver
@@ -324,15 +323,12 @@ class KeyboardListener:
         )
         if self.settings.engine_v2 and self._easify_engine is not None:
             self._easify_engine.handle_event(
-                EngineEvent(
-                    EngineEventType.CAPTURE_SUBMIT,
-                    CaptureSubmitPayload(
-                        capture_text=run_prompt,
-                        delete_count=dc,
-                        undo_restore=undo,
-                        prior_words=self._prior_context_string(),
-                        focused_app_at_submit=focused,
-                    ),
+                input_buffer.capture_submit(
+                    capture_text=run_prompt,
+                    delete_count=dc,
+                    undo_restore=undo,
+                    prior_words=self._prior_context_string(),
+                    focused_app_at_submit=focused,
                 )
             )
             return

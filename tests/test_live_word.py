@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 
 from app.autocorrect.engine import AutocorrectEngine
+from app.cache.service import CacheService
 from app.cache.store import SqliteExpansionCache
 from app.engine.live_resolve import live_cache_prompt, resolve_live_word
 from app.engine.live_word import LiveWordResolver, is_safe_word
@@ -41,7 +42,7 @@ def test_live_resolve_dict(tmp_path: Path) -> None:
     p = tmp_path / "s.json"
     p.write_text("{}", encoding="utf-8")
     sn = SnippetEngine([p])
-    cache = SqliteExpansionCache(tmp_path / "c.db")
+    cache = CacheService(SqliteExpansionCache(tmp_path / "c.db"))
     r = LiveWordResolver(sn, ac, cache, "m", fuzzy_threshold=92)
     assert r.resolve("teh") == "the"
 
@@ -97,7 +98,7 @@ def test_resolve_live_word_autocorrect_fuzzy(tmp_path: Path) -> None:
     p = tmp_path / "s.json"
     p.write_text("{}", encoding="utf-8")
     sn = SnippetEngine([p])
-    cache = SqliteExpansionCache(tmp_path / "c.db")
+    cache = CacheService(SqliteExpansionCache(tmp_path / "c.db"))
     assert (
         resolve_live_word(
             "argumet",
@@ -119,7 +120,7 @@ def test_resolve_cache_without_fuzzy(tmp_path: Path) -> None:
     p = tmp_path / "s.json"
     p.write_text("{}", encoding="utf-8")
     sn = SnippetEngine([p])
-    cache = SqliteExpansionCache(tmp_path / "c.db")
+    cache = CacheService(SqliteExpansionCache(tmp_path / "c.db"))
     cache.put("m", live_cache_prompt("custom"), "CUSTOM")
     assert (
         resolve_live_word(

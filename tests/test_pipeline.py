@@ -6,6 +6,7 @@ import httpx
 from app.ai.chat_provider import OllamaChatProvider
 from app.ai.ollama import OllamaClient
 from app.autocorrect.engine import AutocorrectEngine
+from app.cache.service import CacheService
 from app.cache.store import SqliteExpansionCache
 from app.engine.l0_compute import FxRateCache
 from app.engine.pipeline import ExpansionPipeline
@@ -17,7 +18,8 @@ def test_pipeline_snippet_instant(tmp_path: Path) -> None:
     sn.write_text('{"hi": "hello"}', encoding="utf-8")
     snippets = SnippetEngine([sn])
     ac = AutocorrectEngine(None)
-    cache = SqliteExpansionCache(tmp_path / "db.sqlite")
+    store = SqliteExpansionCache(tmp_path / "db.sqlite")
+    cache = CacheService(store)
     fx = FxRateCache(tmp_path / "fx.json")
     llm = OllamaChatProvider(OllamaClient("http://127.0.0.1:9/nope", "noop", timeout_s=0.1, retries=0))
     pipe = ExpansionPipeline(
@@ -42,7 +44,8 @@ def test_pipeline_snippet_expands_date_placeholder(tmp_path: Path) -> None:
     sn.write_text('{"sig": "— {date:%Y}"}', encoding="utf-8")
     snippets = SnippetEngine([sn])
     ac = AutocorrectEngine(None)
-    cache = SqliteExpansionCache(tmp_path / "db.sqlite")
+    store = SqliteExpansionCache(tmp_path / "db.sqlite")
+    cache = CacheService(store)
     fx = FxRateCache(tmp_path / "fx.json")
     llm = OllamaChatProvider(OllamaClient("http://127.0.0.1:9/nope", "noop", timeout_s=0.1, retries=0))
     pipe = ExpansionPipeline(

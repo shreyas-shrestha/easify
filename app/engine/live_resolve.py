@@ -10,12 +10,11 @@ from __future__ import annotations
 import re
 import time
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Optional, Union
+from typing import TYPE_CHECKING, Optional
 
 from rapidfuzz import fuzz
 
 from app.cache.service import CacheService
-from app.cache.store import SqliteExpansionCache
 from app.engine.guards import is_safe_phrase_tokens, is_safe_word, preserve_case, ratio_exceeds
 from app.snippets.template import expand_snippet_template
 from app.utils.log import get_logger
@@ -24,7 +23,7 @@ if TYPE_CHECKING:
     from app.autocorrect.engine import AutocorrectEngine
     from app.snippets.engine import SnippetEngine
 
-LiveCacheRead = Union[SqliteExpansionCache, CacheService]
+LiveCacheRead = CacheService
 
 LOG = get_logger(__name__)
 

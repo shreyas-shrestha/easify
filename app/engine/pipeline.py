@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from typing import TYPE_CHECKING, Optional, Union
+from typing import TYPE_CHECKING, Optional
 
 import httpx
 
@@ -12,7 +12,6 @@ from app.ai import prompts
 from app.ai.chat_provider import ChatProvider
 from app.autocorrect.engine import AutocorrectEngine
 from app.cache.service import CacheService
-from app.cache.store import SqliteExpansionCache
 from app.engine.expansion_contracts import CacheTouchHandler, ExpansionLayer, ExpansionOutcome, l3_layer
 from app.engine.l0_compute import FxRateCache, try_l0_async
 from app.snippets.engine import SnippetEngine
@@ -36,7 +35,7 @@ class ExpansionPipeline:
         *,
         snippets: SnippetEngine,
         autocorrect: AutocorrectEngine,
-        cache: Union[SqliteExpansionCache, CacheService],
+        cache: CacheService,
         llm: ChatProvider,
         fx_cache: FxRateCache,
         semantic_index: Optional["SnippetSemanticIndex"] = None,
@@ -47,7 +46,7 @@ class ExpansionPipeline:
     ) -> None:
         self.snippets = snippets
         self.autocorrect = autocorrect
-        self.cache: CacheService = cache if isinstance(cache, CacheService) else CacheService(cache)
+        self.cache = cache
         self.llm = llm
         self.fx_cache = fx_cache
         self.semantic_index = semantic_index
