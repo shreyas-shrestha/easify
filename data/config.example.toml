@@ -1,0 +1,20 @@
+# Easify — copy to ~/.config/easify/config.toml or ~/.easify/config.toml
+# Or set EASIFY_CONFIG=/path/to/this/file
+# Env vars (EASIFY_*) always override these values.
+
+trigger = "///"
+model = "phi3"
+# ollama_url = "http://127.0.0.1:11434/api/generate"
+
+live_autocorrect = false
+live_fuzzy = true
+live_cache = true
+live_min_word_len = 3
+live_fuzzy_threshold = 92
+cooldown_ms = 150
+phrase_buffer_max = 0
+
+prewarm = false
+perf = false
+inject_prefer_type = true
+metrics = false

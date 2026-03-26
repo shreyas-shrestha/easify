@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "easify"
-version = "0.3.0"
+version = "0.3.1"
 description = "Cross-platform AI text expansion: layered snippets, autocorrect, cache, local Ollama"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -16,6 +16,7 @@ dependencies = [
     "pynput>=1.7.6",
     "pyperclip>=1.9.0",
     "rapidfuzz>=3.0.0",
+    "tomli>=2.0.1",
 ]
 
 [project.scripts]

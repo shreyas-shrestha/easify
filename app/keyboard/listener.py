@@ -125,6 +125,8 @@ class KeyboardListener:
             self._inject_depth += 1
             try:
                 self._type_text(new_text + " ")
+                if self.service.metrics is not None:
+                    self.service.metrics.incr("live_replacements")
             except Exception as e:
                 LOG.warning("live type failed: %s", e)
             finally:

@@ -18,6 +18,7 @@ from app.autocorrect.engine import AutocorrectEngine
 from app.snippets.engine import SnippetEngine
 from app.utils import clipboard as cb
 from app.utils.log import get_logger
+from app.utils.metrics import Metrics
 
 LOG = get_logger(__name__)
 
@@ -126,6 +127,7 @@ class ExpansionService:
             LOG.error("inject not configured")
             return
         self._inject_busy.set()
+        injected_ok = False
         try:
             LOG.info("inject layer=%s delete=%s", layer, delete_count)
             self._delete_fn(delete_count)
@@ -133,6 +135,7 @@ class ExpansionService:
             if self._type_fn is not None and self.settings.inject_prefer_type:
                 try:
                     self._type_fn(text)
+                    injected_ok = True
                     return
                 except Exception as e:
                     LOG.warning("type inject failed, using clipboard: %s", e)
@@ -156,7 +159,10 @@ class ExpansionService:
                 cb.set_clipboard(text)
                 time.sleep(self.settings.paste_delay_ms / 1000.0)
                 self._paste_fn(text)
+            injected_ok = True
         finally:
+            if injected_ok and self.metrics is not None:
+                self.metrics.incr("capture_injections")
             self._inject_busy.clear()
 
     def preload_cache_metadata(self) -> None:

@@ -7,6 +7,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
+from app.config.toml_loader import merge_config_into_settings
+
 
 def _env(name: str, default: str) -> str:
     return os.environ.get(f"EASIFY_{name}") or os.environ.get(f"OLLAMA_EXPANDER_{name}") or default
@@ -62,6 +64,7 @@ class Settings:
     phrase_buffer_max: int = field(default_factory=lambda: max(0, min(20, int(_env("PHRASE_BUFFER_MAX", "0")))))
     perf: bool = field(default_factory=lambda: _env_bool("PERF", False))
     inject_prefer_type: bool = field(default_factory=lambda: _env_bool("INJECT_TYPE_FIRST", True))
+    metrics_enabled: bool = field(default_factory=lambda: _env_bool("METRICS", False))
 
     backend: str = field(default_factory=lambda: _env("BACKEND", "pynput"))
     clipboard_restore: bool = field(default_factory=lambda: _env_bool("CLIPBOARD_RESTORE", False))
@@ -114,6 +117,7 @@ class Settings:
                 except ValueError:
                     pass
                 break
+        merge_config_into_settings(self)
 
     @classmethod
     def load(cls) -> "Settings":

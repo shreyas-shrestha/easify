@@ -41,7 +41,7 @@ easify/
     autocorrect/      # dictionary JSON
     plugins/          # reserved registry (future)
     bundled/          # default *.json inside the wheel
-    utils/            # logging, clipboard
+    utils/            # logging, clipboard, metrics
   data/               # dev-time defaults (repo checkout)
   tests/
   requirements.txt
@@ -68,6 +68,12 @@ easify         # or: python -m app
 ## Environment
 
 Prefer **`EASIFY_*`**. **`OLLAMA_EXPANDER_*`** still works where noted in `app/config/settings.py`.
+
+### Config file (TOML)
+
+Optional: **`~/.config/easify/config.toml`** or **`~/.easify/config.toml`**, or **`EASIFY_CONFIG=/path/to/config.toml`**. Keys mirror env names in snake_case (e.g. `live_autocorrect`, `cooldown_ms`, `model`). **Environment always wins** over the file for the same knob.
+
+See `data/config.example.toml` in the repo.
 
 | Variable | Meaning |
 |----------|---------|
@@ -125,6 +131,7 @@ Phrase intents (“im going too” → “I'm going to”) → future **phrase b
 | `EASIFY_PHRASE_BUFFER_MAX` | `0` | Last *N* words for phrase correction (`0` = off); try phrase before single-word |
 | `EASIFY_PERF` | off | Log per-stage timings (ms) for capture + live resolution |
 | `EASIFY_INJECT_TYPE_FIRST` | on | `///` expansion: `Controller.type` before clipboard paste (better undo) |
+| `EASIFY_METRICS` | off | `1` → persist counters under `~/.config/easify/metrics.json` (`live_replacements`, `capture_injections`) |
 | `EASIFY_LIVE_FUZZY_CUTOFF` | — | **Deprecated:** maps to threshold ≈ cutoff−1 if set |
 | `EASIFY_LIVE_FIX_COOLDOWN` | — | **Deprecated:** seconds → ms for cooldown if set |
 
