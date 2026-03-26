@@ -46,3 +46,15 @@ metrics = false
 # expansion_preview = false
 # backend = "pynput"
 # evdev_device = "/dev/input/event0"
+
+# --- Phase 3 ---
+# semantic_snippets = false
+# semantic_model = "sentence-transformers/all-MiniLM-L6-v2"
+# semantic_min_similarity = 0.35
+# snippet_namespace_lenient = false
+# Namespaced snippet keys like `slack:thanks` match when the focused app name contains `slack`.
+# cache_promote_min_hits = 0
+# cache_promote_sources = "ai,bg"
+# undo_hotkey = ""
+# ui_host = "127.0.0.1"
+# ui_port = 8765

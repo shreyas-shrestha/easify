@@ -69,28 +69,40 @@ class SqliteExpansionCache:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_ai_cache_last ON ai_cache(last_used);")
         self._migrate(conn)
 
-    def get(self, model: str, prompt: str) -> Optional[str]:
+    def lookup(self, model: str, prompt: str) -> tuple[Optional[str], int, str]:
+        """Return (response or None, hit_count after touch, source). Miss → (None, 0, '')."""
         k = _cache_key(model, prompt.strip())
         now = time.time()
         with self._lock:
             conn = self._ensure_connection()
-            cur = conn.execute("SELECT response, created_at FROM ai_cache WHERE key = ?", (k,))
+            cur = conn.execute(
+                "SELECT response, created_at, hit_count, COALESCE(source,'ai') AS src "
+                "FROM ai_cache WHERE key = ?",
+                (k,),
+            )
             row = cur.fetchone()
-            if row:
-                if self._entry_ttl_sec > 0:
-                    try:
-                        created = float(row["created_at"])
-                    except (TypeError, ValueError):
-                        created = now
-                    if now - created > float(self._entry_ttl_sec):
-                        conn.execute("DELETE FROM ai_cache WHERE key = ?", (k,))
-                        return None
-                conn.execute(
-                    "UPDATE ai_cache SET hit_count = hit_count + 1, last_used = ? WHERE key = ?",
-                    (now, k),
-                )
-                return str(row["response"])
-        return None
+            if not row:
+                return None, 0, ""
+            if self._entry_ttl_sec > 0:
+                try:
+                    created = float(row["created_at"])
+                except (TypeError, ValueError):
+                    created = now
+                if now - created > float(self._entry_ttl_sec):
+                    conn.execute("DELETE FROM ai_cache WHERE key = ?", (k,))
+                    return None, 0, ""
+            conn.execute(
+                "UPDATE ai_cache SET hit_count = hit_count + 1, last_used = ? WHERE key = ?",
+                (now, k),
+            )
+            cur2 = conn.execute("SELECT hit_count FROM ai_cache WHERE key = ?", (k,))
+            r2 = cur2.fetchone()
+            hits = int(r2["hit_count"]) if r2 else int(row["hit_count"]) + 1
+            return str(row["response"]), hits, str(row["src"] or "ai")
+
+    def get(self, model: str, prompt: str) -> Optional[str]:
+        text, _, _ = self.lookup(model, prompt)
+        return text
 
     def put(self, model: str, prompt: str, response: str, *, source: str = "ai") -> None:
         k = _cache_key(model, prompt.strip())

@@ -34,6 +34,14 @@ class ExpansionJob:
     capture: str
     delete_count: int
     prior_words: str = ""
+    # Re-type after removing injection (e.g. trigger + intent); empty → delete injected text only (palette).
+    undo_restore: str = ""
+
+
+@dataclass
+class UndoFrame:
+    injected: str
+    restore: str
 
 
 @dataclass(frozen=True)
@@ -56,12 +64,21 @@ class ExpansionService:
         self.cache = SqliteExpansionCache(settings.cache_db_path, entry_ttl_sec=settings.cache_ttl_sec)
         self.fx_cache = FxRateCache(settings.cache_db_path.parent / "fx_rates.json")
         self.llm = build_chat_provider(settings)
+        self.semantic_index = None
+        if settings.semantic_snippets:
+            from app.snippets.semantic_index import SnippetSemanticIndex
+
+            self.semantic_index = SnippetSemanticIndex(self.snippets, settings)
+        touch = self._on_cache_touch if settings.cache_promote_min_hits > 0 else None
         self.pipeline = ExpansionPipeline(
             snippets=self.snippets,
             autocorrect=self.autocorrect,
             cache=self.cache,
             llm=self.llm,
             fx_cache=self.fx_cache,
+            semantic_index=self.semantic_index,
+            on_cache_touch=touch,
+            snippet_namespace_lenient=settings.snippet_namespace_lenient,
             verbose=settings.verbose,
             perf=settings.perf,
         )
@@ -83,6 +100,59 @@ class ExpansionService:
         self._delete_fn: Optional[Callable[[int], None]] = None
         self._paste_fn: Optional[Callable[[str], None]] = None
         self._type_fn: Optional[Callable[[str], None]] = None
+        self._undo: Optional[UndoFrame] = None
+        self._undo_lock = threading.Lock()
+
+    def _on_cache_touch(self, cache_prompt: str, response: str, hit_count: int, source: str) -> None:
+        from app.snippets.promote import maybe_promote_cache_hit
+
+        if maybe_promote_cache_hit(
+            user_snippets=self.settings.user_snippets_path(),
+            config_dir=self.settings.cache_db_path.parent,
+            cache_prompt=cache_prompt,
+            response=response,
+            hit_count=hit_count,
+            source=source,
+            min_hits=self.settings.cache_promote_min_hits,
+            allowed_sources=self.settings.cache_promote_source_set(),
+        ):
+            self.snippets.reload()
+
+    def set_undo_frame(self, injected: str, restore: str) -> None:
+        if not injected:
+            return
+        with self._undo_lock:
+            self._undo = UndoFrame(injected=injected, restore=restore.strip())
+
+    def try_undo(self) -> bool:
+        with self._undo_lock:
+            frame = self._undo
+            self._undo = None
+        if frame is None or self._delete_fn is None:
+            return False
+        with self._inject_lock:
+            try:
+                LOG.info("undo expansion delete=%s restore_len=%s", len(frame.injected), len(frame.restore))
+                self._delete_fn(len(frame.injected))
+                time.sleep(self.settings.after_delete_ms / 1000.0)
+                if frame.restore:
+                    typed = False
+                    if self._type_fn is not None and self.settings.inject_prefer_type:
+                        try:
+                            self._type_fn(frame.restore)
+                            typed = True
+                        except Exception as e:
+                            LOG.warning("undo type failed: %s", e)
+                    if not typed and self._paste_fn is not None:
+                        cb.set_clipboard(frame.restore)
+                        time.sleep(self.settings.paste_delay_ms / 1000.0)
+                        self._paste_fn(frame.restore)
+                if self.metrics is not None:
+                    self.metrics.incr("undo_expansions")
+                return True
+            except Exception as e:
+                LOG.warning("undo failed: %s", e)
+                return False
 
     def set_inject(
         self,
@@ -317,15 +387,16 @@ class ExpansionService:
                     if not ok:
                         self.tray_set_idle("preview cancelled")
                         continue
-                await asyncio.to_thread(self._apply_replacement, job.delete_count, outcome.text, outcome.layer)
+                await asyncio.to_thread(self._apply_replacement, job, outcome.text, outcome.layer)
             except Exception as e:
                 self.tray_set_error(str(e))
                 LOG.exception("expansion failed: %s", e)
 
-    def _apply_replacement(self, delete_count: int, text: str, layer: str) -> None:
+    def _apply_replacement(self, job: ExpansionJob, text: str, layer: str) -> None:
         if self._delete_fn is None or self._paste_fn is None:
             LOG.error("inject not configured")
             return
+        delete_count = job.delete_count
         injected_ok = False
         with self._inject_lock:
             try:
@@ -363,6 +434,8 @@ class ExpansionService:
             finally:
                 if injected_ok and self.metrics is not None:
                     self.metrics.incr("capture_injections")
+        if injected_ok:
+            self.set_undo_frame(text, job.undo_restore)
 
     def preload_cache_metadata(self) -> None:
         """Log cache stats + optional warmup file listing (no automatic LLM fan-out)."""

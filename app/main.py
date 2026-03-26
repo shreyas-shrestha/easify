@@ -37,9 +37,15 @@ def main() -> None:
     sub = ap.add_subparsers(dest="command")
     sub.add_parser("run", help="Start global listener (default)")
     sub.add_parser("init", help="Create ~/.config/easify/ and default snippets.json")
+    sub.add_parser("ui", help="Local web UI for user snippets (localhost)")
     args = ap.parse_args()
     if args.command == "init":
         _init_config()
+        return
+    if args.command == "ui":
+        from app.ui.snippet_server import run_snippet_ui
+
+        run_snippet_ui(Settings.load())
         return
     if args.command not in (None, "run"):
         ap.print_help()
@@ -104,6 +110,22 @@ def main() -> None:
         except Exception as e:
             LOG.warning("palette hotkey failed (%s); check pynput hotkey grammar", e)
 
+    undo_listener = None
+    if settings.undo_hotkey.strip():
+        try:
+            from pynput import keyboard as kb
+
+            hk_u = settings.undo_hotkey.strip()
+
+            def _undo_expansion() -> None:
+                service.try_undo()
+
+            undo_listener = kb.GlobalHotKeys({hk_u: _undo_expansion})
+            undo_listener.start()
+            LOG.info("undo hotkey registered: %s", hk_u)
+        except Exception as e:
+            LOG.warning("undo hotkey failed (%s); check pynput hotkey grammar", e)
+
     if settings.tray_enabled:
 
         def _tray_stop() -> None:
@@ -129,6 +151,11 @@ def main() -> None:
         if hotkey_listener is not None:
             try:
                 hotkey_listener.stop()
+            except Exception:
+                pass
+        if undo_listener is not None:
+            try:
+                undo_listener.stop()
             except Exception:
                 pass
         service.cache.close()

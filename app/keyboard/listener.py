@@ -262,13 +262,16 @@ class KeyboardListener:
                     return
                 if from_prefix and self.settings.use_prefix_trigger and self.trigger:
                     dc = len(self.trigger) + len(run_prompt) + max(0, self.enter_backspaces)
+                    undo = f"{self.trigger}{run_prompt}"
                 else:
                     dc = len(run_prompt) + max(0, self.enter_backspaces)
+                    undo = run_prompt
                 self.service.submit(
                     ExpansionJob(
                         capture=run_prompt,
                         delete_count=dc,
                         prior_words=self._prior_context_string(),
+                        undo_restore=undo,
                     )
                 )
                 return

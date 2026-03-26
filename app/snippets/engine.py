@@ -3,11 +3,16 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
 from rapidfuzz import fuzz, process
+
+
+def _focus_blob(s: str) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", s.lower()).strip()
 
 
 @dataclass
@@ -42,6 +47,33 @@ class SnippetEngine:
         self._mtime = latest_m
         self._keys_list = list(self._store.keys())[: self._max_keys]
 
+    @property
+    def content_version(self) -> float:
+        return float(self._mtime)
+
+    def iter_snippets(self) -> dict[str, str]:
+        self.maybe_reload()
+        return dict(self._store)
+
+    def get_value(self, key: str) -> Optional[str]:
+        self.maybe_reload()
+        return self._store.get(key.strip().lower())
+
+    def key_visible_for_focus(self, key: str, focus_raw: str, *, lenient: bool) -> bool:
+        """Keys with `namespace:rest` only match when focused app name contains `namespace`."""
+        k = key.strip().lower()
+        if ":" not in k:
+            return True
+        ns = k.split(":", 1)[0].strip().lower()
+        if not ns:
+            return True
+        blob = _focus_blob(focus_raw)
+        if not blob or focus_raw.strip().lower() in ("", "unknown"):
+            return bool(lenient)
+        if ns in blob.split():
+            return True
+        return ns in blob or blob.startswith(ns + " ") or (" " + ns + " ") in (" " + blob + " ")
+
     def maybe_reload(self) -> None:
         """Hot-reload if any file changed (cheap stat)."""
         for path in self._paths:
@@ -49,24 +81,34 @@ class SnippetEngine:
                 self.reload()
                 return
 
-    def resolve_exact(self, query: str) -> Optional[SnippetHit]:
+    def _visible_keys(self, focused_app: str, namespace_lenient: bool) -> list[str]:
+        return [k for k in self._keys_list if self.key_visible_for_focus(k, focused_app, lenient=namespace_lenient)]
+
+    def resolve_exact(
+        self, query: str, *, focused_app: str = "", namespace_lenient: bool = False
+    ) -> Optional[SnippetHit]:
         self.maybe_reload()
         k = query.strip().lower()
         if not k:
+            return None
+        if not self.key_visible_for_focus(k, focused_app, lenient=namespace_lenient):
             return None
         v = self._store.get(k)
         if v is None:
             return None
         return SnippetHit(layer=1, key=k, value=v, score=100.0)
 
-    def resolve_fuzzy(self, query: str) -> Optional[SnippetHit]:
+    def resolve_fuzzy(
+        self, query: str, *, focused_app: str = "", namespace_lenient: bool = False
+    ) -> Optional[SnippetHit]:
         self.maybe_reload()
         k = query.strip().lower()
-        if not k or not self._keys_list:
+        keys = self._visible_keys(focused_app, namespace_lenient)
+        if not k or not keys:
             return None
         match = process.extractOne(
             k,
-            self._keys_list,
+            keys,
             scorer=fuzz.WRatio,
             score_cutoff=self._fuzzy_cutoff,
         )
@@ -75,16 +117,24 @@ class SnippetEngine:
         key, score, _ = match
         return SnippetHit(layer=2, key=key, value=self._store[key], score=float(score))
 
-    def resolve_fuzzy_ratio(self, query: str, score_cutoff: int) -> Optional[SnippetHit]:
+    def resolve_fuzzy_ratio(
+        self,
+        query: str,
+        score_cutoff: int,
+        *,
+        focused_app: str = "",
+        namespace_lenient: bool = True,
+    ) -> Optional[SnippetHit]:
         """Live-word path: stricter `fuzz.ratio` cutoff (e.g. > 92 → cutoff 93)."""
         self.maybe_reload()
         k = query.strip().lower()
-        if not k or not self._keys_list:
+        keys = self._visible_keys(focused_app, namespace_lenient)
+        if not k or not keys:
             return None
         co = max(50, min(100, int(score_cutoff)))
         match = process.extractOne(
             k,
-            self._keys_list,
+            keys,
             scorer=fuzz.ratio,
             score_cutoff=co,
         )

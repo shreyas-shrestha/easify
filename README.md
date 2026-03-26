@@ -54,12 +54,22 @@ At least one must be enabled (defaults: **prefix on**, double-space off, palette
 
 Cache keys for **contextual** L3 rows include the augmented system string (app + prior words). Snippet / fuzzy / context-free cache behavior is unchanged.
 
+## Phase 3 (semantic snippets, promotion, namespaces, UI, undo)
+
+| Feature | Env / notes |
+|---------|-------------|
+| **Semantic snippet match** | `EASIFY_SEMANTIC_SNIPPETS=1` — embedding similarity on keys after fuzzy miss; `pip install easify[semantic]` (or `sentence-transformers`). `EASIFY_SEMANTIC_MODEL`, `EASIFY_SEMANTIC_MIN_SIMILARITY` (default `0.35`) |
+| **Per-app snippet keys** | Keys `namespace:rest` (e.g. `slack:thanks`) only resolve when the **focused app** name contains `namespace`, unless `EASIFY_SNIPPET_NAMESPACE_LENIENT=1` (show all when focus is unknown) |
+| **Cache → snippet promotion** | `EASIFY_CACHE_PROMOTE_MIN_HITS=N` (default `0` = off): after each cache hit, if `hit_count ≥ N` and source is in `EASIFY_CACHE_PROMOTE_SOURCES` (default `ai,bg`), append `promoted-<slug>` to `~/.config/easify/snippets.json` (deduped) |
+| **Snippet web UI** | `easify ui` — `http://127.0.0.1:8765/` by default (`EASIFY_UI_HOST`, `EASIFY_UI_PORT`) |
+| **Undo last expansion** | `EASIFY_UNDO_HOTKEY='<ctrl>+<shift>+z>'` — removes the injected text and restores the captured trigger + intent when possible; palette expansions (`delete_count=0`) delete only the injected text |
+
 ## Repository layout
 
 ```text
 easify/
   app/
-    main.py           # CLI (run | init)
+    main.py           # CLI (run | init | ui)
     config/           # Settings (env + paths)
     keyboard/         # pynput listener + key mapping
     engine/           # pipeline, ExpansionService, buffers

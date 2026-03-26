@@ -194,6 +194,26 @@ def apply_toml_to_settings(obj: Any, data: Mapping[str, Any]) -> None:
     take_int("paste_delay_ms", "EASIFY_PASTE_DELAY_MS", key="paste_delay_ms", lo=0, hi=5000)
     take_int("after_delete_ms", "EASIFY_AFTER_DELETE_MS", key="after_delete_ms", lo=0, hi=2000)
 
+    take_bool("semantic_snippets", "EASIFY_SEMANTIC_SNIPPETS", key="semantic_snippets")
+    take_str("semantic_model", "EASIFY_SEMANTIC_MODEL", key="semantic_model")
+    take_float("semantic_min_similarity", "EASIFY_SEMANTIC_MIN_SIMILARITY", key="semantic_min_similarity")
+    take_bool(
+        "snippet_namespace_lenient",
+        "EASIFY_SNIPPET_NAMESPACE_LENIENT",
+        key="snippet_namespace_lenient",
+    )
+    take_int(
+        "cache_promote_min_hits",
+        "EASIFY_CACHE_PROMOTE_MIN_HITS",
+        key="cache_promote_min_hits",
+        lo=0,
+        hi=1_000_000,
+    )
+    take_str("cache_promote_sources", "EASIFY_CACHE_PROMOTE_SOURCES", key="cache_promote_sources")
+    take_str("undo_hotkey", "EASIFY_UNDO_HOTKEY", key="undo_hotkey")
+    take_str("ui_host", "EASIFY_UI_HOST", key="ui_host")
+    take_int("ui_port", "EASIFY_UI_PORT", key="ui_port", lo=1, hi=65535)
+
 
 def merge_config_into_settings(obj: Any) -> None:
     data = load_first_config_toml()

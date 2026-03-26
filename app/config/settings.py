@@ -119,6 +119,28 @@ class Settings:
     debug_keys: bool = field(default_factory=lambda: _env_bool("DEBUG", False))
     verbose: bool = field(default_factory=lambda: _env_bool("VERBOSE", False))
 
+    semantic_snippets: bool = field(default_factory=lambda: _env_bool("SEMANTIC_SNIPPETS", False))
+    semantic_model: str = field(
+        default_factory=lambda: _env(
+            "SEMANTIC_MODEL",
+            "sentence-transformers/all-MiniLM-L6-v2",
+        ).strip()
+        or "sentence-transformers/all-MiniLM-L6-v2"
+    )
+    semantic_min_similarity: float = field(
+        default_factory=lambda: max(0.05, min(0.99, float(_env("SEMANTIC_MIN_SIMILARITY", "0.35"))))
+    )
+    snippet_namespace_lenient: bool = field(
+        default_factory=lambda: _env_bool("SNIPPET_NAMESPACE_LENIENT", False)
+    )
+    cache_promote_min_hits: int = field(
+        default_factory=lambda: max(0, min(1_000_000, int(_env("CACHE_PROMOTE_MIN_HITS", "0"))))
+    )
+    cache_promote_sources: str = field(default_factory=lambda: _env("CACHE_PROMOTE_SOURCES", "ai,bg").strip())
+    undo_hotkey: str = field(default_factory=lambda: _env("UNDO_HOTKEY", "").strip())
+    ui_host: str = field(default_factory=lambda: _env("UI_HOST", "127.0.0.1").strip() or "127.0.0.1")
+    ui_port: int = field(default_factory=lambda: max(1, min(65535, int(_env("UI_PORT", "8765")))))
+
     ollama_timeout_s: float = field(default_factory=lambda: float(_env("OLLAMA_TIMEOUT", "120")))
     ollama_retries: int = field(default_factory=lambda: int(_env("RETRIES", "2")))
 
@@ -165,6 +187,14 @@ class Settings:
                     pass
                 break
         merge_config_into_settings(self)
+
+    def user_snippets_path(self) -> Path:
+        """Primary user-writable snippets file (for promotions and UI)."""
+        return _config_dir() / "snippets.json"
+
+    def cache_promote_source_set(self) -> frozenset[str]:
+        parts = {p.strip().lower() for p in self.cache_promote_sources.replace(";", ",").split(",") if p.strip()}
+        return frozenset(parts) if parts else frozenset({"ai", "bg"})
 
     def any_activation_enabled(self) -> bool:
         if self.use_prefix_trigger:
