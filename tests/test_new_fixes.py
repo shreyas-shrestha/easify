@@ -137,16 +137,27 @@ def test_classify_does_not_over_route_to_convert() -> None:
         assert system != CONVERT, f"should not be CONVERT for {query!r}"
 
 
-# ── FxRateCache threading.Lock (Python 3.9 safe) ────────────────────────────
+# ── FxRateCache asyncio.Lock (never hold across await with threading.Lock) ─
 
 
-def test_fx_cache_lock_is_threading_lock(tmp_path: Path) -> None:
-    import threading
+def test_fx_cache_uses_asyncio_lock_after_convert(tmp_path: Path) -> None:
+    import asyncio
+
+    import httpx
 
     from app.engine.l0_compute import FxRateCache
 
     fx = FxRateCache(tmp_path / "fx.json")
-    assert isinstance(fx._conv_lock, type(threading.Lock()))
+    assert fx._async_conv_lock is None
+
+    async def _touch() -> None:
+        async with httpx.AsyncClient() as c:
+            out = await fx.convert(c, 1.0, "USD", "USD")
+        assert out == "1 USD"
+
+    asyncio.run(_touch())
+    assert fx._async_conv_lock is not None
+    assert isinstance(fx._async_conv_lock, asyncio.Lock)
 
 
 def test_fx_cache_fallback_when_frankfurter_fails(tmp_path: Path) -> None:

@@ -135,7 +135,7 @@ def get_focused_app_name(ttl_sec: float = _FOCUS_TTL_SEC) -> str:
     with _focus_lock:
         _focus_cache_at = time.monotonic()
         _focus_cache_val = label or "unknown"
-    return _focus_cache_val
+        return _focus_cache_val
 
 
 def get_focused_app_name_fresh(*, cmd_timeout: float = 1.25) -> str:

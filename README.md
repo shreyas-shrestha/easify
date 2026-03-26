@@ -74,7 +74,7 @@ Cache keys for **contextual** L3 rows include the augmented system string (app +
 | **Promotion cap** | `EASIFY_CACHE_PROMOTE_MAX_KEYS` (default `500`, `0` = unlimited) stops unbounded `promoted-*` growth |
 | **Double-space timing** | `EASIFY_DOUBLE_SPACE_SETTLE_MS` (default `20`): brief pause after deleting the two spaces before capture mode so focused apps can process backspaces (pynput race mitigation) |
 | **Live enrich** | Ultra-common words are skipped via `app/bundled/live_enrich_blocklist.txt` (no config knob) |
-| **Undo expansions** | `EASIFY_UNDO_HOTKEY='<ctrl>+<shift>+z>'` — **LIFO stack** (default depth `EASIFY_UNDO_STACK_MAX=32`): each successful injection pushes a step; undo pops the most recent. A failed undo **does not** drop the frame (retry the hotkey after fixing focus / permissions). Palette expansions (`delete_count=0`) delete only the injected text |
+| **Undo expansions** | `EASIFY_UNDO_HOTKEY='<ctrl>+<shift>+z>'` — **LIFO stack** (default depth `EASIFY_UNDO_STACK_MAX=32`): each successful injection pushes a step; undo pops the most recent. A failed undo **does not** drop the frame (retry the hotkey after fixing focus / permissions). Palette expansions (`delete_count=0`) delete only the injected text. **macOS + accessibility inject:** undo’s AX replace is dispatched on **libdispatch’s main queue** (AppKit-safe); use **`EASIFY_TRAY=1`** (default) so `pystray`’s main run loop processes those blocks. |
 
 ## Doctor & autostart
 

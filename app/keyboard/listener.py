@@ -5,7 +5,8 @@ from __future__ import annotations
 import threading
 import time
 from collections import deque
-from typing import Callable, Optional
+from contextlib import contextmanager
+from typing import Callable, Iterator, Optional
 
 from pynput.keyboard import Controller, Key, Listener
 
@@ -44,6 +45,7 @@ class KeyboardListener:
         self._capture = CaptureBuffer(max_chars=settings.capture_max_chars)
         self._capture_from_prefix = False
         self._inject_depth = 0
+        self._inject_depth_lock = threading.Lock()
         self._listener: Optional[Listener] = None
         self._ctrl: Optional[Controller] = None
         self._delete_n: Optional[Callable[[int], None]] = None
@@ -86,6 +88,20 @@ class KeyboardListener:
                 fuzzy_threshold=settings.live_fuzzy_threshold,
                 perf=settings.perf,
             )
+
+    def _inject_depth_get(self) -> int:
+        with self._inject_depth_lock:
+            return self._inject_depth
+
+    @contextmanager
+    def _inject_depth_hold(self) -> Iterator[None]:
+        with self._inject_depth_lock:
+            self._inject_depth += 1
+        try:
+            yield
+        finally:
+            with self._inject_depth_lock:
+                self._inject_depth -= 1
 
     def _live_clear(self) -> None:
         self._live_chars.clear()
@@ -288,11 +304,8 @@ class KeyboardListener:
     def _enter_capture_from_double_space(self) -> None:
         if self._delete_n is None:
             return
-        self._inject_depth += 1
-        try:
+        with self._inject_depth_hold():
             self._delete_n(2)
-        finally:
-            self._inject_depth -= 1
         # Immediate state transition — blocking sleeps on this thread drop keystrokes.
         # Legacy settle-after-delete (double_space_settle_ms) was removed; use app-side
         # delays only if unavoidable.
@@ -326,15 +339,13 @@ class KeyboardListener:
             try:
                 self._delete_n(len(old_word) + 1)
                 time.sleep(self.settings.after_delete_ms / 1000.0)
-                self._inject_depth += 1
-                try:
-                    self._type_text(new_text + " ")
-                    if self.service.metrics is not None:
-                        self.service.metrics.incr("live_replacements")
-                except Exception as e:
-                    LOG.warning("live type failed: %s", e)
-                finally:
-                    self._inject_depth -= 1
+                with self._inject_depth_hold():
+                    try:
+                        self._type_text(new_text + " ")
+                        if self.service.metrics is not None:
+                            self.service.metrics.incr("live_replacements")
+                    except Exception as e:
+                        LOG.warning("live type failed: %s", e)
             except Exception as e:
                 LOG.warning("live replace failed: %s", e)
 
@@ -377,7 +388,7 @@ class KeyboardListener:
                 threading.Thread(target=_restore, daemon=True).start()
 
     def _on_press(self, key: object) -> None:
-        if self._inject_depth > 0:
+        if self._inject_depth_get() > 0:
             return
         if self.service.inject_lock.locked():
             return
@@ -509,45 +520,33 @@ class KeyboardListener:
         parent = self
 
         def delete_n(n: int) -> None:
-            parent._inject_depth += 1
-            try:
+            with parent._inject_depth_hold():
                 for _ in range(max(0, n)):
                     ctrl.tap(Key.backspace)
                     if delay_bs:
                         time.sleep(delay_bs)
-            finally:
-                parent._inject_depth -= 1
 
         def paste_text(_: str) -> None:
-            parent._inject_depth += 1
-            try:
+            with parent._inject_depth_hold():
                 with ctrl.pressed(mod_key):
                     ctrl.press("v")
                     ctrl.release("v")
-            finally:
-                parent._inject_depth -= 1
 
         def type_expansion(text: str) -> None:
-            parent._inject_depth += 1
-            try:
+            with parent._inject_depth_hold():
                 if hasattr(ctrl, "type"):
                     ctrl.type(text)
                 else:
                     for c in text:
                         ctrl.press(c)
                         ctrl.release(c)
-            finally:
-                parent._inject_depth -= 1
 
         def cursor_left_n(n: int) -> None:
-            parent._inject_depth += 1
-            try:
+            with parent._inject_depth_hold():
                 for _ in range(max(0, n)):
                     ctrl.tap(Key.left)
                     if delay_bs:
                         time.sleep(delay_bs)
-            finally:
-                parent._inject_depth -= 1
 
         parent._delete_n = delete_n
         parent._paste_text = paste_text

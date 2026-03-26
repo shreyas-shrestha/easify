@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import asyncio
 import json
 import operator
 import re
@@ -12,7 +13,7 @@ import unicodedata
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, cast
 
 import httpx
 
@@ -344,9 +345,8 @@ class FxRateCache:
     ttl_sec: int = 86_400
     _mem: Dict[str, Any] = field(default_factory=dict)
     _loaded_at: float = field(default=0.0)
-
-    def __post_init__(self) -> None:
-        self._conv_lock = threading.Lock()
+    _async_conv_lock: Optional[asyncio.Lock] = field(default=None, repr=False, compare=False)
+    _async_conv_init: threading.Lock = field(default_factory=threading.Lock, repr=False, compare=False)
 
     def _load_file(self) -> None:
         if not self.path.is_file():
@@ -385,7 +385,11 @@ class FxRateCache:
         }
 
     async def convert(self, client: httpx.AsyncClient, amount: float, frm: str, to: str) -> Optional[str]:
-        with self._conv_lock:
+        with self._async_conv_init:
+            if self._async_conv_lock is None:
+                self._async_conv_lock = asyncio.Lock()
+        lock = cast(asyncio.Lock, self._async_conv_lock)
+        async with lock:
             frm_u, to_u = frm.upper(), to.upper()
             if frm_u == to_u:
                 return f"{amount:g} {to_u}"

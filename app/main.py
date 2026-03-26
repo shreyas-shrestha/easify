@@ -93,6 +93,10 @@ def main() -> None:
         sys.exit(2)
 
     service = ExpansionService(settings)
+    if platform.system() == "Darwin":
+        from app.utils.darwin_dispatch import run_on_darwin_main_thread
+
+        service.set_main_thread_runner(run_on_darwin_main_thread)
     stop = threading.Event()
     service.start()
     service.preload_cache_metadata()

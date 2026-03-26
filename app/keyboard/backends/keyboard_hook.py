@@ -43,7 +43,7 @@ def run_keyboard_hook_blocking(listener: "KeyboardListener", stop: threading.Eve
     listener._setup_inject(listener._ctrl)
 
     def on_event(event: keyboard.KeyboardEvent) -> None:
-        if stop.is_set() or listener._inject_depth > 0:
+        if stop.is_set() or listener._inject_depth_get() > 0:
             return
         if listener.service.inject_lock.locked():
             return

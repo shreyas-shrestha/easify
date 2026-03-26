@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import platform
 import re
 import threading
 import time
@@ -82,7 +83,11 @@ class LiveEnrichJob:
 
 @dataclass
 class _PendingExpansionTail:
-    """Keys typed after capture submit, applied together when the expansion is injected."""
+    """Keys typed after capture submit, applied together when the expansion is injected.
+
+    Lock order: acquire ``ExpansionService._pending_tail_lock`` before ``pe.lock``.
+    Inject/undo holds ``_inject_lock`` first, then ``_pending_tail_lock`` (see ``_pop_tail_for_job``).
+    """
 
     job: ExpansionJob
     tail: list[str] = field(default_factory=list)
@@ -128,6 +133,8 @@ class ExpansionService:
         self._queue: Optional[asyncio.Queue[ExpansionJob]] = None
         self._enrich_queue: Optional[asyncio.Queue[LiveEnrichJob]] = None
         self._enrich_inflight: set[str] = set()
+        self._enrich_inflight_lock = threading.Lock()
+        self._main_thread_runner: Optional[Callable[[Callable[[], None]], None]] = None
         self._enrich_rate_window: deque[float] = deque()
         self._ready = threading.Event()
         self._inject_lock = threading.Lock()
@@ -222,20 +229,36 @@ class ExpansionService:
         if frame.via_accessibility:
             from app.inject.accessibility import replace_in_focused_field
 
-            with self._inject_lock:
-                try:
-                    ok = replace_in_focused_field(
-                        old=frame.injected,
-                        new=frame.restore or "",
-                        match_last=self.settings.inject_accessibility_match_last,
-                        unique_match_only=False,
-                    )
-                    if ok and self.metrics is not None:
-                        self.metrics.incr("undo_expansions")
-                    return ok
-                except Exception as e:
-                    LOG.warning("accessibility undo failed: %s", e)
-                    return False
+            def do_ax_undo() -> bool:
+                with self._inject_lock:
+                    try:
+                        ok = replace_in_focused_field(
+                            old=frame.injected,
+                            new=frame.restore or "",
+                            match_last=self.settings.inject_accessibility_match_last,
+                            unique_match_only=False,
+                        )
+                        if ok and self.metrics is not None:
+                            self.metrics.incr("undo_expansions")
+                        return ok
+                    except Exception as e:
+                        LOG.warning("accessibility undo failed: %s", e)
+                        return False
+
+            if platform.system() == "Darwin" and self._main_thread_runner is not None:
+                outcome: list[Optional[bool]] = [None]
+                done = threading.Event()
+
+                def _on_main() -> None:
+                    try:
+                        outcome[0] = do_ax_undo()
+                    finally:
+                        done.set()
+
+                self._main_thread_runner(_on_main)
+                done.wait(timeout=30.0)
+                return outcome[0] is True
+            return do_ax_undo()
         if self._delete_fn is None:
             return False
         with self._inject_lock:
@@ -284,6 +307,21 @@ class ExpansionService:
         self._paste_fn = paste_fn
         self._type_fn = type_fn
         self._cursor_left_fn = cursor_left_fn
+
+    def set_main_thread_runner(self, fn: Optional[Callable[[Callable[[], None]], None]]) -> None:
+        """macOS: schedule accessibility / AppKit work on the process main run loop (e.g. libdispatch)."""
+        self._main_thread_runner = fn
+
+    def _enrich_try_claim(self, dk: str) -> bool:
+        with self._enrich_inflight_lock:
+            if dk in self._enrich_inflight:
+                return False
+            self._enrich_inflight.add(dk)
+            return True
+
+    def _enrich_release(self, dk: str) -> None:
+        with self._enrich_inflight_lock:
+            self._enrich_inflight.discard(dk)
 
     @property
     def inject_lock(self) -> threading.Lock:
@@ -396,9 +434,8 @@ class ExpansionService:
         if self.cache.get(model, ck):
             return
         dk = f"{model}\x00{ck}"
-        if dk in self._enrich_inflight:
+        if not self._enrich_try_claim(dk):
             return
-        self._enrich_inflight.add(dk)
         job = LiveEnrichJob(
             dedup_key=dk,
             cache_prompt=ck,
@@ -412,7 +449,7 @@ class ExpansionService:
                 f.result()
             except Exception as e:
                 LOG.debug("enqueue live enrich: %s", e)
-                self._enrich_inflight.discard(job.dedup_key)
+                self._enrich_release(job.dedup_key)
 
         fut.add_done_callback(_cb)
 
@@ -431,9 +468,8 @@ class ExpansionService:
         if self.cache.get(model, ck):
             return
         dk = f"{model}\x00{ck}"
-        if dk in self._enrich_inflight:
+        if not self._enrich_try_claim(dk):
             return
-        self._enrich_inflight.add(dk)
         job = LiveEnrichJob(
             dedup_key=dk,
             cache_prompt=ck,
@@ -447,16 +483,16 @@ class ExpansionService:
                 f.result()
             except Exception as e:
                 LOG.debug("enqueue live enrich phrase: %s", e)
-                self._enrich_inflight.discard(job.dedup_key)
+                self._enrich_release(job.dedup_key)
 
         fut.add_done_callback(_cb)
 
     async def _enqueue_live_enrich(self, job: LiveEnrichJob) -> None:
         if self._enrich_queue is None:
-            self._enrich_inflight.discard(job.dedup_key)
+            self._enrich_release(job.dedup_key)
             return
         if self._enrich_queue.full():
-            self._enrich_inflight.discard(job.dedup_key)
+            self._enrich_release(job.dedup_key)
             return
         await self._enrich_queue.put(job)
         self._record_enrich_queued()
@@ -494,7 +530,7 @@ class ExpansionService:
             except Exception as e:
                 LOG.debug("live enrich job error: %s", e)
             finally:
-                self._enrich_inflight.discard(job.dedup_key)
+                self._enrich_release(job.dedup_key)
 
     def start(self) -> None:
         qmax = max(4, self.settings.live_enrich_queue_max)
