@@ -44,6 +44,7 @@ class Settings:
         default_factory=lambda: max(100, min(3000, int(_env("DOUBLE_SPACE_WINDOW_MS", "400"))))
     )
     palette_hotkey: str = field(default_factory=lambda: _env("PALETTE_HOTKEY", "").strip())
+    palette_hotkey_alt: str = field(default_factory=lambda: _env("PALETTE_HOTKEY_ALT", "").strip())
     capture_max_chars: int = field(
         default_factory=lambda: max(256, min(100_000, int(_env("CAPTURE_MAX_CHARS", "4000"))))
     )
@@ -74,6 +75,10 @@ class Settings:
     context_include_focused_app: bool = field(default_factory=lambda: _env_bool("CONTEXT_FOCUSED_APP", True))
     context_buffer_words: int = field(
         default_factory=lambda: max(0, min(96, int(_env("CONTEXT_BUFFER_WORDS", "8"))))
+    )
+    context_clipboard_for_l3: bool = field(default_factory=lambda: _env_bool("CONTEXT_CLIPBOARD_L3", False))
+    context_clipboard_max_chars: int = field(
+        default_factory=lambda: max(0, min(8000, int(_env("CONTEXT_CLIPBOARD_MAX_CHARS", "2000"))))
     )
     expansion_preview: bool = field(default_factory=lambda: _env_bool("EXPANSION_PREVIEW", False))
     evdev_device: str = field(default_factory=lambda: _env("EVDEV_DEVICE", "").strip())
@@ -137,6 +142,8 @@ class Settings:
         default_factory=lambda: _env_bool("INJECT_ACCESSIBILITY_UNIQUE_MATCH_ONLY", True)
     )
     metrics_enabled: bool = field(default_factory=lambda: _env_bool("METRICS", False))
+    expansion_log_enabled: bool = field(default_factory=lambda: _env_bool("EXPANSION_LOG", False))
+    expansion_log_path: Path = field(default_factory=lambda: _config_dir() / "expansion_log.jsonl")
 
     backend: str = field(default_factory=lambda: _env("BACKEND", "pynput"))
     clipboard_restore: bool = field(default_factory=lambda: _env_bool("CLIPBOARD_RESTORE", True))
@@ -231,6 +238,9 @@ class Settings:
                     pass
                 break
         merge_config_into_settings(self)
+        expansion_log_override = os.environ.get("EASIFY_EXPANSION_LOG_PATH")
+        if expansion_log_override and str(expansion_log_override).strip():
+            self.expansion_log_path = Path(os.path.expanduser(str(expansion_log_override).strip()))
 
     def user_snippets_path(self) -> Path:
         """Primary user-writable snippets file (for promotions and UI)."""

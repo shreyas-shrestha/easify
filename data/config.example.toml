@@ -12,6 +12,8 @@ activation_prefix = true
 # activation_double_space = true
 # double_space_window_ms = 400
 # palette_hotkey = "<ctrl>+<shift>+e>"
+# Second chord if the OS swallows the primary global hotkey:
+# palette_hotkey_alt = "<cmd>+<alt>+e>"
 # tray = true
 # capture_max_chars = 4000
 
@@ -42,6 +44,10 @@ inject_via_accessibility = true
 # inject_accessibility_unique_match_only = true
 clipboard_restore = true
 metrics = false
+# expansion_log = true
+# expansion_log_path = "~/.config/easify/expansion_log.jsonl"
+# context_clipboard_l3 = false
+# context_clipboard_max_chars = 2000
 
 # Drop SQLite cache rows older than N seconds (0 = never). Compares wall clock to created_at.
 # cache_ttl_sec = 0

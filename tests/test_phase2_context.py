@@ -17,6 +17,17 @@ def test_attach_context_skips_unknown_app() -> None:
     assert s == "BASE"
 
 
+def test_sanitize_clipboard_context() -> None:
+    assert prompts.sanitize_clipboard_context("", 100) == ""
+    assert prompts.sanitize_clipboard_context("  a\nb\tc  ", 10) == "a b c"
+
+
+def test_attach_context_includes_clipboard_snippet() -> None:
+    s = prompts.attach_context("BASE", clipboard_snippet="pasted ref")
+    assert "clipboard" in s.lower()
+    assert "pasted ref" in s
+
+
 def test_factory_default_ollama(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("EASIFY_AI_PROVIDER", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)

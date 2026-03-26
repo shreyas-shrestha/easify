@@ -128,6 +128,15 @@ def main() -> None:
         settings.context_buffer_words,
     )
 
+    if settings.palette_hotkey.strip() or settings.undo_hotkey.strip():
+        from app.utils.hotkey_risks import log_global_hotkey_notices
+
+        log_global_hotkey_notices(
+            platform.system(),
+            palette=settings.palette_hotkey.strip(),
+            undo=settings.undo_hotkey.strip(),
+        )
+
     if platform.system() == "Linux":
         from app.context.focus import log_wayland_keyboard_notice
 
@@ -157,13 +166,21 @@ def main() -> None:
 
             start_palette_worker(service, settings)
             hk_str = settings.palette_hotkey.strip()
+            hk_alt = settings.palette_hotkey_alt.strip()
 
             def _palette() -> None:
                 enqueue_palette_request(listener._prior_context_string())
 
-            hotkey_listener = kb.GlobalHotKeys({hk_str: _palette})
+            palette_bindings = {hk_str: _palette}
+            if hk_alt:
+                palette_bindings[hk_alt] = _palette
+            hotkey_listener = kb.GlobalHotKeys(palette_bindings)
             hotkey_listener.start()
-            LOG.info("palette hotkey registered: %s", hk_str)
+            LOG.info(
+                "palette hotkey registered: %s%s",
+                hk_str,
+                f" (alt {hk_alt})" if hk_alt else "",
+            )
         except Exception as e:
             LOG.warning("palette hotkey failed (%s); check pynput hotkey grammar", e)
 

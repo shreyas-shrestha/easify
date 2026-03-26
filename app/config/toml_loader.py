@@ -85,6 +85,14 @@ def apply_toml_to_settings(obj: Any, data: Mapping[str, Any]) -> None:
         except (TypeError, ValueError):
             pass
 
+    def take_path(attr: str, *env_keys: str, key: Optional[str] = None) -> None:
+        kmap = key or attr
+        if kmap not in data or env_sets_any(*env_keys):
+            return
+        val = data[kmap]
+        if val is not None:
+            setattr(obj, attr, Path(str(val).strip()).expanduser())
+
     take_str("trigger", "EASIFY_TRIGGER", "OLLAMA_EXPANDER_TRIGGER")
     take_str("capture_close", "EASIFY_CAPTURE_CLOSE", key="capture_close")
     take_bool("use_prefix_trigger", "EASIFY_ACTIVATION_PREFIX", key="activation_prefix")
@@ -97,6 +105,7 @@ def apply_toml_to_settings(obj: Any, data: Mapping[str, Any]) -> None:
         hi=3000,
     )
     take_str("palette_hotkey", "EASIFY_PALETTE_HOTKEY", key="palette_hotkey")
+    take_str("palette_hotkey_alt", "EASIFY_PALETTE_HOTKEY_ALT", key="palette_hotkey_alt")
     take_int(
         "capture_max_chars",
         "EASIFY_CAPTURE_MAX_CHARS",
@@ -120,6 +129,14 @@ def apply_toml_to_settings(obj: Any, data: Mapping[str, Any]) -> None:
         key="context_buffer_words",
         lo=0,
         hi=96,
+    )
+    take_bool("context_clipboard_for_l3", "EASIFY_CONTEXT_CLIPBOARD_L3", key="context_clipboard_l3")
+    take_int(
+        "context_clipboard_max_chars",
+        "EASIFY_CONTEXT_CLIPBOARD_MAX_CHARS",
+        key="context_clipboard_max_chars",
+        lo=0,
+        hi=8000,
     )
     take_bool("expansion_preview", "EASIFY_EXPANSION_PREVIEW", key="expansion_preview")
     take_str("evdev_device", "EASIFY_EVDEV_DEVICE", key="evdev_device")
@@ -185,6 +202,8 @@ def apply_toml_to_settings(obj: Any, data: Mapping[str, Any]) -> None:
     take_bool("perf", "EASIFY_PERF", key="perf")
     take_bool("inject_prefer_type", "EASIFY_INJECT_TYPE_FIRST", key="inject_prefer_type")
     take_bool("metrics_enabled", "EASIFY_METRICS", key="metrics")
+    take_bool("expansion_log_enabled", "EASIFY_EXPANSION_LOG", key="expansion_log")
+    take_path("expansion_log_path", "EASIFY_EXPANSION_LOG_PATH", key="expansion_log_path")
 
     take_bool("clipboard_restore", "EASIFY_CLIPBOARD_RESTORE", key="clipboard_restore")
     take_bool("debug_keys", "EASIFY_DEBUG", key="debug")

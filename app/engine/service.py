@@ -29,6 +29,7 @@ from app.engine.live_word import live_cache_prompt
 from app.engine.pipeline import ExpansionPipeline
 from app.snippets.engine import SnippetEngine
 from app.utils import clipboard as cb
+from app.utils.expansion_log import append_expansion_record
 from app.utils.live_enrich_blocklist import should_skip_live_enrich_token
 from app.utils.log import get_logger
 from app.utils.metrics import Metrics
@@ -533,25 +534,66 @@ class ExpansionService:
         if self._loop and self._loop.is_running():
             self._loop.call_soon_threadsafe(self._loop.stop)
 
+    def _journal_expansion(
+        self,
+        job: ExpansionJob,
+        *,
+        layer: str,
+        result_text: str,
+        ok: bool,
+        error: str = "",
+        inject: str = "",
+    ) -> None:
+        append_expansion_record(
+            self.settings,
+            {
+                "capture": (job.capture or "")[:500],
+                "layer": layer,
+                "ok": ok,
+                "result_preview": (result_text or "")[:240],
+                "result_len": len(result_text or ""),
+                "error": (error or "")[:500],
+                "inject": inject,
+            },
+        )
+
     async def _consume(self, client: httpx.AsyncClient) -> None:
         assert self._queue is not None
         while True:
             job = await self._queue.get()
+            journal_layer = ""
+            journal_text = ""
             try:
                 self.tray_set_thinking(job.capture)
                 focused = ""
                 if self.settings.context_include_focused_app:
                     focused = await asyncio.to_thread(get_focused_app_name)
+                clip_snippet = ""
+                if self.settings.context_clipboard_for_l3 and self.settings.context_clipboard_max_chars > 0:
+                    raw = await asyncio.to_thread(cb.get_clipboard)
+                    clip_snippet = prompts.sanitize_clipboard_context(
+                        raw, self.settings.context_clipboard_max_chars
+                    )
                 outcome = await self.pipeline.expand(
                     job.capture,
                     client,
                     focused_app=focused,
                     prior_words=job.prior_words,
+                    clipboard_snippet=clip_snippet,
                 )
+                journal_layer = outcome.layer
+                journal_text = outcome.text or ""
                 if not outcome.text:
                     self._discard_pending_tail(job)
                     LOG.warning("empty expansion result (%s)", outcome.layer)
                     self.tray_set_error(f"empty result ({outcome.layer})")
+                    self._journal_expansion(
+                        job,
+                        layer=outcome.layer,
+                        result_text="",
+                        ok=False,
+                        error="empty expansion",
+                    )
                     continue
                 prev = outcome.text
                 short = prev if len(prev) <= 100 else prev[:97] + "…"
@@ -563,10 +605,35 @@ class ExpansionService:
                     if not ok:
                         self._discard_pending_tail(job)
                         self.tray_set_idle("preview cancelled")
+                        self._journal_expansion(
+                            job,
+                            layer=outcome.layer,
+                            result_text=outcome.text,
+                            ok=False,
+                            error="preview cancelled",
+                        )
                         continue
-                await asyncio.to_thread(self._apply_replacement, job, outcome.text, outcome.layer)
+                await self._wait_tail_quiet_async(job)
+                inject_kind = await asyncio.to_thread(
+                    self._apply_replacement, job, outcome.text, outcome.layer
+                )
+                self._journal_expansion(
+                    job,
+                    layer=outcome.layer,
+                    result_text=outcome.text,
+                    ok=bool(inject_kind),
+                    error="" if inject_kind else "inject did not complete",
+                    inject=inject_kind,
+                )
             except Exception as e:
                 self._discard_pending_tail(job)
+                self._journal_expansion(
+                    job,
+                    layer=journal_layer or "error",
+                    result_text=journal_text,
+                    ok=False,
+                    error=str(e),
+                )
                 lump = f"{e}\n{traceback.format_exc()}"
                 hint = ""
                 if isinstance(e, httpx.ConnectError):
@@ -605,12 +672,32 @@ class ExpansionService:
             time.sleep(min(0.02, max(0.004, settle / 5)))
         LOG.debug("inject tail settle: max wait exceeded, injecting anyway")
 
-    def _apply_replacement(self, job: ExpansionJob, text: str, layer: str) -> None:
+    async def _wait_tail_quiet_async(self, job: ExpansionJob) -> None:
+        """Async tail settle — avoids blocking a ``asyncio.to_thread`` pool worker for seconds."""
+        settle = self.settings.inject_settle_ms / 1000.0
+        if settle <= 0:
+            return
+        max_wait = max(0.05, self.settings.inject_settle_max_wait_ms / 1000.0)
+        deadline = time.monotonic() + max_wait
+        while time.monotonic() < deadline:
+            with self._pending_tail_lock:
+                if not self._pending_tails or self._pending_tails[0].job is not job:
+                    return
+                pe = self._pending_tails[0]
+            with pe.lock:
+                if not pe.tail:
+                    return
+                idle_for = time.monotonic() - pe.last_activity_mono
+            if idle_for >= settle:
+                return
+            await asyncio.sleep(min(0.02, max(0.004, settle / 5)))
+        LOG.debug("inject tail settle: max wait exceeded, injecting anyway")
+
+    def _apply_replacement(self, job: ExpansionJob, text: str, layer: str) -> str:
         if self._delete_fn is None or self._paste_fn is None:
             LOG.error("inject not configured")
             self._discard_pending_tail(job)
-            return
-        self._wait_tail_quiet(job)
+            return ""
         injected_ok = False
         to_inject = ""
         undo_restore = ""
@@ -626,7 +713,7 @@ class ExpansionService:
                         "Secure or password field — expansion not injected.",
                         degraded_hint="Type the result manually if needed; Easify never injects into password fields.",
                     )
-                    return
+                    return ""
                 if self.settings.pre_inject_refocus and layer_warrants_pre_inject_refocus(layer):
                     refocus_if_needed_for_inject(captured_app=job.focused_app_at_submit)
                 ok_focus, bad_focus = inject_focus_safe_for_keys(captured_app=job.focused_app_at_submit)
@@ -634,7 +721,7 @@ class ExpansionService:
                     LOG.error("inject aborted: %s", bad_focus)
                     self._discard_pending_tail(job)
                     self.tray_set_error(bad_focus, degraded_hint="Focus safety — no keys or clipboard paste were sent.")
-                    return
+                    return ""
                 tail = self._pop_tail_for_job(job)
                 n_tail = len(tail)
                 synth_undo = f"{job.undo_restore}{tail}"
@@ -721,6 +808,8 @@ class ExpansionService:
                     self.metrics.incr("capture_injections")
         if injected_ok:
             self.set_undo_frame(to_inject, undo_restore, via_accessibility=via_ax)
+            return "accessibility" if via_ax else "keystroke"
+        return ""
 
     def preload_cache_metadata(self) -> None:
         """Log cache stats + optional warmup file listing (no automatic LLM fan-out)."""

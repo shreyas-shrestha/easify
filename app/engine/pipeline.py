@@ -173,6 +173,7 @@ class ExpansionPipeline:
         *,
         focused_app: str = "",
         prior_words: str = "",
+        clipboard_snippet: str = "",
     ) -> ExpansionOutcome:
         t0 = time.perf_counter()
 
@@ -223,6 +224,7 @@ class ExpansionPipeline:
             base_system,
             focused_app=focused_app,
             prior_words=prior_words,
+            clipboard_snippet=clipboard_snippet,
         )
         ck = _cache_prompt(self.llm.cache_model_id, user_prompt, system_full)
 

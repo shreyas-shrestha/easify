@@ -42,11 +42,11 @@ At least one must be enabled (defaults: **prefix on**, **double-space off**, pal
 |------|-----|--------|
 | Prefix | `EASIFY_ACTIVATION_PREFIX=1` (default) | Requires `EASIFY_TRIGGER` (default `//`) and optional `EASIFY_CAPTURE_CLOSE` (default `//`) |
 | Double-space | `EASIFY_ACTIVATION_DOUBLE_SPACE=1` (**opt in**) | Second **Space** within `EASIFY_DOUBLE_SPACE_WINDOW_MS` (default 400 ms) opens capture; two spaces are deleted — off by default so sentence spacing does not open capture |
-| Palette | `EASIFY_PALETTE_HOTKEY='<ctrl>+<shift>+e>'` | pynput `GlobalHotKeys` grammar; opens a small **tkinter** window to type intent (no prefix) |
+| Palette | `EASIFY_PALETTE_HOTKEY='<ctrl>+<shift>+e>'` | pynput `GlobalHotKeys` grammar; opens a small **tkinter** window to type intent (no prefix). **OS/apps may register the same chord first** — Easify logs startup **warnings** (e.g. Ctrl+Shift on macOS). Use **`EASIFY_PALETTE_HOTKEY_ALT`** for a second binding if the primary is swallowed. |
 
 **Tray:** `EASIFY_TRAY=1` (default) — **pystray** + **Pillow**; tooltip shows model, queue depths, undo stack size, and expanded error text; menu: **Copy last error**, **Dismiss error**, **Quit**. Disable with `EASIFY_TRAY=0` on headless servers.
 
-**Injection target:** While you wait for L0/L3, macOS may focus **Terminal** (or another window). Easify records the frontmost app when you **finish** the capture and calls **Activate** right before inject (`EASIFY_PRE_INJECT_REFOCUS=1`, default). If Notes still ignores synthetic typing, try `EASIFY_INJECT_TYPE_FIRST=0` (clipboard paste). **Parallel tail:** after you keep typing while a capture resolves, Easify waits **`EASIFY_INJECT_SETTLE_MS`** (default 55 ms) after your last key before inject. It then **moves the caret left** across that tail, **deletes only** `//…//`, and types the **result** — your sentence is **not** backspaced away first (set `EASIFY_INJECT_TAIL_CURSOR_LEFT=0` to restore the legacy delete-through-tail behavior if an app mis-handles arrow keys).
+**Injection target:** While you wait for L0/L3, macOS may focus **Terminal** (or another window). Easify records the frontmost app when you **finish** the capture and calls **Activate** right before inject (`EASIFY_PRE_INJECT_REFOCUS=1`, default). If Notes still ignores synthetic typing, try `EASIFY_INJECT_TYPE_FIRST=0` (clipboard paste). **Parallel tail:** after you keep typing while a capture resolves, Easify waits **`EASIFY_INJECT_SETTLE_MS`** (default 55 ms) after your last key before inject (bounded by **`EASIFY_INJECT_SETTLE_MAX_WAIT_MS`**). That wait runs on the async worker with **`asyncio.sleep`**, not in `asyncio.to_thread`, so it does not pin a default executor thread for other work. It then **moves the caret left** across that tail, **deletes only** `//…//`, and types the **result** — your sentence is **not** backspaced away first (set `EASIFY_INJECT_TAIL_CURSOR_LEFT=0` to restore the legacy delete-through-tail behavior if an app mis-handles arrow keys).
 
 **L0 examples:** `5 inches to cm`, `100 USD to EUR`, `2 + 2*3`, `today + 14 days`.
 
@@ -146,6 +146,7 @@ See `data/config.example.toml` in the repo.
 | `EASIFY_UNDO_STACK_MAX` | Max remembered undo steps (default `32`, capped 256) |
 | `EASIFY_DOUBLE_SPACE_WINDOW_MS` | Max gap between spaces (default `400`) |
 | `EASIFY_PALETTE_HOTKEY` | e.g. `<ctrl>+<shift>+e>` — floating palette |
+| `EASIFY_PALETTE_HOTKEY_ALT` | Optional second palette chord (same handler) if the primary conflicts with the OS |
 | `EASIFY_CAPTURE_MAX_CHARS` | Max captured intent length (default `4000`) |
 | `EASIFY_TRAY` | `1` = system tray icon + status (default) |
 | `EASIFY_SNIPPET_RELOAD_LISTEN_PORT` | `easify run` localhost port for snippet UI push-reload (default `8766`; `0` = off) |
@@ -172,6 +173,8 @@ See `data/config.example.toml` in the repo.
 | `EASIFY_ANTHROPIC_MODEL` | Default `claude-3-5-haiku-20241022` |
 | `EASIFY_CONTEXT_FOCUSED_APP` | `1` = detect foreground app for L3 (default) |
 | `EASIFY_CONTEXT_BUFFER_WORDS` | Rolling word count for L3 (default `8`; `0` = off) |
+| `EASIFY_CONTEXT_CLIPBOARD_L3` | **Opt in:** append a trimmed system **clipboard** excerpt to the L3 system prompt (copy → then capture workflow); may include secrets — enable only when you trust the clipboard |
+| `EASIFY_CONTEXT_CLIPBOARD_MAX_CHARS` | Max clipboard characters inlined for L3 (default `2000`; `0` = treat as off) |
 | `EASIFY_EXPANSION_PREVIEW` | `1` = confirm injection in a small window |
 | `EASIFY_BACKEND` | `pynput` \| `keyboard` \| `evdev` |
 | `EASIFY_EVDEV_DEVICE` | Linux evdev path when `BACKEND=evdev` |
@@ -221,6 +224,7 @@ With **`EASIFY_PHRASE_BUFFER_MAX` &gt; 0**, multi-word phrases use the same stag
 | `EASIFY_PERF` | off | Log per-stage timings (ms) for capture + live resolution |
 | `EASIFY_INJECT_TYPE_FIRST` | on | Capture expansion: `Controller.type` before clipboard paste (better undo) |
 | `EASIFY_METRICS` | off | `1` → persist counters under `~/.config/easify/metrics.json` (`live_replacements`, `capture_injections`, `live_enrich_*`) |
+| `EASIFY_EXPANSION_LOG` | off | `1` → append JSON lines to **`EASIFY_EXPANSION_LOG_PATH`** (default `~/.config/easify/expansion_log.jsonl`) with `capture`, `layer`, `ok`, `result_preview`, `inject` (`accessibility` / `keystroke`) for auditing |
 | `EASIFY_LIVE_CACHE_ENRICH` | on | After deterministic live miss, background Ollama → SQLite live-cache (`source=bg`) |
 | `EASIFY_LIVE_ENRICH_MIN_LEN` | `4` | Min word length to enqueue single-token enrich |
 | `EASIFY_LIVE_ENRICH_MAX_PER_MINUTE` | `12` | Soft cap on queued enrich jobs per rolling minute (`0` = unlimited) |
