@@ -38,6 +38,13 @@ def main() -> None:
     sub.add_parser("run", help="Start global listener (default)")
     sub.add_parser("init", help="Create ~/.config/easify/ and default snippets.json")
     sub.add_parser("ui", help="Local web UI for user snippets (localhost)")
+    p_doc = sub.add_parser("doctor", help="Check paths, optional deps, and AI backend reachability")
+    p_doc.add_argument("--strict", action="store_true", help="Exit with error if any warnings")
+    p_as = sub.add_parser("autostart", help="Install or remove login startup (macOS/Linux/Windows)")
+    as_sub = p_as.add_subparsers(dest="autostart_cmd")
+    as_sub.add_parser("install", help="Start Easify when you log in")
+    as_sub.add_parser("remove", help="Remove login startup entry")
+    as_sub.add_parser("status", help="Show autostart configuration state")
     args = ap.parse_args()
     if args.command == "init":
         _init_config()
@@ -47,6 +54,22 @@ def main() -> None:
 
         run_snippet_ui(Settings.load())
         return
+    if args.command == "doctor":
+        from app.cli.doctor import run_doctor
+
+        sys.exit(run_doctor(Settings.load(), strict=args.strict))
+    if args.command == "autostart":
+        from app.cli import autostart as autostart_mod
+
+        cmd = args.autostart_cmd
+        if cmd == "install":
+            sys.exit(autostart_mod.autostart_install())
+        if cmd == "remove":
+            sys.exit(autostart_mod.autostart_remove())
+        if cmd == "status":
+            sys.exit(autostart_mod.autostart_status())
+        p_as.print_help()
+        sys.exit(2)
     if args.command not in (None, "run"):
         ap.print_help()
         return

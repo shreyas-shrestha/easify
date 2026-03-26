@@ -28,3 +28,15 @@ def test_l0_date_today_plus_days() -> None:
     out = try_date_arithmetic("today + 1 days")
     assert out is not None
     assert len(out) == 10
+
+
+def test_l0_date_in_weeks() -> None:
+    out = try_date_arithmetic("in 2 weeks")
+    assert out is not None
+    assert len(out) == 10
+
+
+def test_l0_date_in_days() -> None:
+    out = try_date_arithmetic("in 3 days")
+    assert out is not None
+    assert len(out) == 10

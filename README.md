@@ -67,12 +67,24 @@ Cache keys for **contextual** L3 rows include the augmented system string (app +
 | **Live enrich** | Ultra-common words are skipped via `app/bundled/live_enrich_blocklist.txt` (no config knob) |
 | **Undo last expansion** | `EASIFY_UNDO_HOTKEY='<ctrl>+<shift>+z>'` — removes the injected text and restores the captured trigger + intent when possible; palette expansions (`delete_count=0`) delete only the injected text |
 
+## Doctor & autostart
+
+| Command | Purpose |
+|---------|---------|
+| `easify doctor` | Prints **ok** / **warn** / **FAIL** for config paths, cache writability, and your AI backend (Ollama `GET /api/tags`, or API keys for OpenAI/Anthropic). Use `--strict` to exit with an error if anything warns. |
+| `easify autostart install` | **macOS:** `~/Library/LaunchAgents/com.easify.app.plist` + `launchctl bootstrap`. **Linux:** `~/.config/systemd/user/easify.service` + `systemctl --user enable --now`. **Windows:** Startup folder `easify_autostart.bat`. Uses `easify` on `PATH`, else `python -m app`. |
+| `easify autostart remove` | Unloads/removes the above. |
+| `easify autostart status` | Shows whether the plist/unit/batch file exists (and on macOS, `launchctl print`). |
+
+**L0:** Phrases like `in 3 days` and `in 2 weeks` (from **today**) are handled in addition to `today + N days`.
+
 ## Repository layout
 
 ```text
 easify/
   app/
-    main.py           # CLI (run | init | ui)
+    main.py           # CLI (run | init | ui | doctor | autostart)
+    cli/              # doctor, autostart helpers
     config/           # Settings (env + paths)
     keyboard/         # pynput listener + key mapping
     engine/           # pipeline, ExpansionService, buffers

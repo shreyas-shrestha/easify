@@ -29,6 +29,10 @@ _RE_DATE_ADD = re.compile(
     r"(?P<n>\d+)\s+(?P<u>days?|weeks?|hours?)\s*$",
     re.I,
 )
+_RE_DATE_IN = re.compile(
+    r"^\s*in\s+(?P<n>\d+)\s+(?P<u>days?|weeks?)\s*$",
+    re.I,
+)
 
 _BINOPS: dict[type, Any] = {
     ast.Add: operator.add,
@@ -110,6 +114,16 @@ def try_math(s: str) -> Optional[str]:
 
 
 def try_date_arithmetic(s: str) -> Optional[str]:
+    sin = _RE_DATE_IN.match(s.strip())
+    if sin:
+        n = int(sin.group("n"))
+        unit = sin.group("u").lower()
+        d = date.today()
+        if unit.startswith("day"):
+            return (d + timedelta(days=n)).isoformat()
+        if unit.startswith("week"):
+            return (d + timedelta(weeks=n)).isoformat()
+        return None
     m = _RE_DATE_ADD.match(s.strip())
     if not m:
         return None
