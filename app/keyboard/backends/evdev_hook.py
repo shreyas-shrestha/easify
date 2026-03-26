@@ -19,13 +19,24 @@ LOG = get_logger(__name__)
 def run_evdev_blocking(listener: "KeyboardListener", stop: threading.Event) -> None:
     from evdev import InputDevice, ecodes
 
-    path = listener.settings.evdev_device
+    path = (listener.settings.evdev_device or "").strip()
     if not path:
-        LOG.error("Set EASIFY_EVDEV_DEVICE=/dev/input/eventN for evdev backend")
-        listener._run_pynput_blocking(stop)
-        return
+        LOG.error(
+            "evdev: EASIFY_EVDEV_DEVICE is empty — set to a keyboard device "
+            "(e.g. /dev/input/event3 from `libinput list-devices`). This backend does not fall back in-process."
+        )
+        raise RuntimeError("EASIFY_EVDEV_DEVICE required for backend=evdev")
 
-    device = InputDevice(path)
+    try:
+        device = InputDevice(path)
+    except PermissionError as e:
+        LOG.error(
+            "evdev: permission denied opening %s (%s). Add your user to the 'input' group "
+            "(sudo usermod -aG input $USER; log out and back in) or use a udev rule to grant access.",
+            path,
+            e,
+        )
+        raise RuntimeError(f"evdev permission denied: {path}") from e
     letters = {getattr(ecodes, f"KEY_{c}"): c.lower() for c in "ABCDEFGHIJKLMNOPQRSTUVWXYZ"}
     listener._ctrl = Controller()
     listener._setup_inject(listener._ctrl)

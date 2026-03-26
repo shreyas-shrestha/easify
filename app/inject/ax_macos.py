@@ -101,6 +101,28 @@ def _find_editable_value(elem: Optional[Any]) -> Tuple[Optional[Any], Optional[s
     return None, None
 
 
+def focused_element_is_password_field() -> bool:
+    """True if the focused control (or a short ancestor chain) is a secure/password text field."""
+    focused = _focused_element()
+    if focused is None:
+        return False
+    cur: Any = focused
+    for _ in range(_MAX_PARENT_HOPS + 3):
+        if cur is None:
+            break
+        err, sub = _copy_attr(cur, "AXSubrole")
+        su = (_py_str(sub) or "").lower()
+        if "secure" in su:
+            return True
+        err2, rd = _copy_attr(cur, "AXRoleDescription")
+        rds = (_py_str(rd) or "").lower()
+        if "password" in rds:
+            return True
+        _, parent = _copy_attr(cur, "AXParent")
+        cur = parent
+    return False
+
+
 def replace_substring_in_focused_element(old: str, new: str, *, match_last: bool = True) -> bool:
     focused = _focused_element()
     if focused is None:

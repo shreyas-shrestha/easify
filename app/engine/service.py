@@ -18,7 +18,12 @@ from app.ai.factory import build_chat_provider
 from app.autocorrect.engine import AutocorrectEngine
 from app.cache.store import SqliteExpansionCache
 from app.config.settings import Settings
-from app.context.focus import get_focused_app_name, layer_warrants_pre_inject_refocus, refocus_if_needed_for_inject
+from app.context.focus import (
+    get_focused_app_name,
+    inject_focus_safe_for_keys,
+    layer_warrants_pre_inject_refocus,
+    refocus_if_needed_for_inject,
+)
 from app.engine.l0_compute import FxRateCache
 from app.engine.live_word import live_cache_prompt
 from app.engine.pipeline import ExpansionPipeline
@@ -611,8 +616,24 @@ class ExpansionService:
         via_ax = False
         with self._inject_lock:
             try:
+                from app.inject.accessibility import focused_field_appears_secure
+
+                if focused_field_appears_secure():
+                    LOG.warning("inject skipped: focused control appears to be a secure/password field")
+                    self._discard_pending_tail(job)
+                    self.tray_set_error(
+                        "Secure or password field — expansion not injected.",
+                        degraded_hint="Type the result manually if needed; Easify never injects into password fields.",
+                    )
+                    return
                 if self.settings.pre_inject_refocus and layer_warrants_pre_inject_refocus(layer):
                     refocus_if_needed_for_inject(captured_app=job.focused_app_at_submit)
+                ok_focus, bad_focus = inject_focus_safe_for_keys(captured_app=job.focused_app_at_submit)
+                if not ok_focus:
+                    LOG.error("inject aborted: %s", bad_focus)
+                    self._discard_pending_tail(job)
+                    self.tray_set_error(bad_focus, degraded_hint="Focus safety — no keys or clipboard paste were sent.")
+                    return
                 tail = self._pop_tail_for_job(job)
                 n_tail = len(tail)
                 synth_undo = f"{job.undo_restore}{tail}"

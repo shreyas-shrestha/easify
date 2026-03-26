@@ -128,6 +128,11 @@ def main() -> None:
         settings.context_buffer_words,
     )
 
+    if platform.system() == "Linux":
+        from app.context.focus import log_wayland_keyboard_notice
+
+        log_wayland_keyboard_notice(settings.backend)
+
     from app.ui.daemon_hooks import start_snippet_reload_hook_server
 
     start_snippet_reload_hook_server(service, settings, stop=stop)

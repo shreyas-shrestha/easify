@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import platform
 import sys
 from typing import Any, Dict, List, Literal, TypedDict
@@ -128,6 +129,28 @@ def gather_doctor_report(settings: Settings) -> Dict[str, Any]:
 
     if settings.backend.strip().lower() == "evdev" and not settings.evdev_device.strip():
         warn("evdev", "EASIFY_BACKEND=evdev but EASIFY_EVDEV_DEVICE is empty")
+    if platform.system() == "Linux":
+        try:
+            from app.context.focus import linux_session_is_wayland
+
+            if linux_session_is_wayland():
+                warn(
+                    "wayland",
+                    "Wayland session: app/window focus via xdotool is unavailable; "
+                    "namespace snippets need EASIFY_SNIPPET_NAMESPACE_LENIENT=1 or X11. "
+                    "For keyboard capture, prefer EASIFY_BACKEND=evdev with device permissions.",
+                )
+        except Exception:
+            pass
+        ed = settings.evdev_device.strip()
+        if ed:
+            if not os.path.exists(ed):
+                warn("evdev_device", f"EASIFY_EVDEV_DEVICE path does not exist: {ed}")
+            elif not os.access(ed, os.R_OK):
+                warn(
+                    "evdev_device",
+                    f"No read access to {ed} — add user to the 'input' group or use a udev rule",
+                )
 
     if platform.system() == "Darwin":
         ok("macos_permissions", "grant Accessibility + Input Monitoring to your terminal (or easify binary)")

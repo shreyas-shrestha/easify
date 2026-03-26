@@ -322,6 +322,7 @@ def test_pre_inject_refocus_only_for_l3_layer(monkeypatch: pytest.MonkeyPatch) -
     def fake_refocus(*, captured_app: str, cmd_timeout: float = 1.25) -> None:
         calls.append(captured_app)
 
+    monkeypatch.setattr("app.engine.service.inject_focus_safe_for_keys", lambda **k: (True, ""))
     monkeypatch.setattr("app.engine.service.refocus_if_needed_for_inject", fake_refocus)
 
     svc = ExpansionService(Settings.load())
@@ -645,6 +646,31 @@ def test_accessibility_substring_index_first_vs_last() -> None:
     old = "//mid//"
     assert cur.rfind(old) == len("left//mid//right")
     assert cur.find(old) == len("left")
+
+
+def test_apply_replacement_aborts_on_focus_mismatch(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("EASIFY_TRAY", "0")
+    monkeypatch.setenv("EASIFY_INJECT_SETTLE_MS", "0")
+    monkeypatch.setenv("EASIFY_INJECT_ACCESSIBILITY", "0")
+    from app.config.settings import Settings
+    from app.engine.service import ExpansionJob, ExpansionService, _PendingExpansionTail
+
+    monkeypatch.setattr("app.inject.accessibility.focused_field_appears_secure", lambda: False)
+
+    def bad_focus(**_k: object) -> tuple[bool, str]:
+        return False, "focus mismatch"
+
+    monkeypatch.setattr("app.engine.service.inject_focus_safe_for_keys", bad_focus)
+    svc = ExpansionService(Settings.load())
+    deleted: list[int] = []
+    svc.set_inject(lambda n: deleted.append(n), lambda t: None, type_fn=lambda s: None)
+    job = ExpansionJob(
+        capture="c", delete_count=3, undo_restore="//c//", focused_app_at_submit="SomeApp"
+    )
+    svc._pending_tails.append(_PendingExpansionTail(job=job))
+    svc._apply_replacement(job, "OUT", "L-test")
+    assert deleted == []
+    assert not svc.has_pending_expansion_tail()
 
 
 def test_accessibility_inject_passes_match_last_false(monkeypatch: pytest.MonkeyPatch) -> None:

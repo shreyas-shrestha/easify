@@ -308,6 +308,11 @@ class KeyboardListener:
     def _perform_live_replace(self, old_word: str, new_text: str) -> None:
         if self._delete_n is None:
             return
+        from app.inject.accessibility import focused_field_appears_secure
+
+        if focused_field_appears_secure():
+            LOG.debug("live replace skipped: secure/password field")
+            return
         with self.service.inject_lock:
             try:
                 self._delete_n(len(old_word) + 1)

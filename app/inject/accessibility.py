@@ -19,6 +19,24 @@ def accessibility_deps_hint() -> Optional[str]:
     return None
 
 
+def focused_field_appears_secure() -> bool:
+    """Best-effort: password / secure text fields must not receive live fixes or expansions."""
+    try:
+        if sys.platform == "darwin":
+            from app.inject.ax_macos import focused_element_is_password_field
+
+            return focused_element_is_password_field()
+        if sys.platform == "win32":
+            from app.inject.uia_windows import focused_control_is_password_field
+
+            return focused_control_is_password_field()
+    except ImportError as e:
+        LOG.debug("secure field probe unavailable: %s", e)
+    except Exception as e:
+        LOG.debug("secure field probe failed: %s", e)
+    return False
+
+
 def replace_in_focused_field(*, old: str, new: str, match_last: bool = True) -> bool:
     """
     Replace ``old`` with ``new`` in the focused text field (``match_last``: rfind vs find).

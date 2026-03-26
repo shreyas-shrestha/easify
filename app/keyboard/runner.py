@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import platform
 import threading
 from typing import TYPE_CHECKING
 
@@ -30,5 +31,20 @@ def run_keyboard_backend(listener: "KeyboardListener", stop: threading.Event) ->
             run_evdev_blocking(listener, stop)
             return
         except Exception as e:
-            LOG.warning("evdev backend failed (%s) — falling back to pynput", e)
+            LOG.error(
+                "evdev backend failed (%s) — falling back to pynput. "
+                "Fix EASIFY_EVDEV_DEVICE, permissions (input group / udev), or install python-evdev.",
+                e,
+            )
+            if platform.system() == "Linux":
+                try:
+                    from app.context.focus import linux_session_is_wayland
+
+                    if linux_session_is_wayland():
+                        LOG.warning(
+                            "Wayland: pynput often cannot capture or inject into native Wayland clients; "
+                            "evdev is the recommended path once device access works."
+                        )
+                except Exception:
+                    pass
     listener._run_pynput_blocking(stop)

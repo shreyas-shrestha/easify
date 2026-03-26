@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import platform
 import re
 import subprocess
@@ -16,6 +17,38 @@ _focus_lock = threading.Lock()
 _focus_cache_at: float = 0.0
 _focus_cache_val: str = ""
 _FOCUS_TTL_SEC = 0.5
+_wayland_focus_warned = False
+
+
+def linux_session_is_wayland() -> bool:
+    """True when the desktop session is Wayland (xdotool / naive X11 focus APIs do not apply)."""
+    if os.environ.get("WAYLAND_DISPLAY"):
+        return True
+    return os.environ.get("XDG_SESSION_TYPE", "").lower() == "wayland"
+
+
+def _maybe_warn_wayland_focus() -> None:
+    global _wayland_focus_warned
+    if not linux_session_is_wayland() or _wayland_focus_warned:
+        return
+    _wayland_focus_warned = True
+    LOG.warning(
+        "Wayland session: window/app focus cannot be read via xdotool for native Wayland clients. "
+        "Focus stays 'unknown' — namespaced snippets and LLM app context are degraded; "
+        "set EASIFY_SNIPPET_NAMESPACE_LENIENT=1 or use X11 if you rely on per-app snippet keys."
+    )
+
+
+def log_wayland_keyboard_notice(backend: str) -> None:
+    """Log once at startup when Wayland + global hooks are a poor match."""
+    if not linux_session_is_wayland():
+        return
+    b = (backend or "pynput").strip().lower() or "pynput"
+    LOG.warning(
+        "Wayland session: backend=%s — global capture/inject often fails for native Wayland apps; "
+        "EASIFY_BACKEND=evdev with /dev/input/event* (input group or udev) is the supported Linux path.",
+        b,
+    )
 
 
 def _run_cmd(args: list[str], timeout: float = 0.35) -> str:
@@ -63,7 +96,9 @@ def _windows_frontmost() -> str:
 
 
 def _linux_frontmost() -> str:
-    # Wayland: no standard; X11: try xdotool or xprop
+    if linux_session_is_wayland():
+        _maybe_warn_wayland_focus()
+        return ""
     out = _run_cmd(["xdotool", "getactivewindow", "getwindowname"], timeout=0.35)
     if out:
         return out[:120]
@@ -176,3 +211,35 @@ def refocus_if_needed_for_inject(*, captured_app: str, cmd_timeout: float = 1.25
     LOG.info("inject refocus → %r (frontmost was %r)", cap, now)
     activate_application(cap, cmd_timeout=2.5)
     time.sleep(0.12)
+
+
+def inject_focus_safe_for_keys(*, captured_app: str, cmd_timeout: float = 1.25) -> tuple[bool, str]:
+    """Before synthetic key/clipboard inject, verify focus matches submit-time app when we can read it."""
+    cap = (captured_app or "").strip()
+    if not cap or cap.lower() == "unknown":
+        return True, ""
+    now = get_focused_app_name_fresh(cmd_timeout=cmd_timeout)
+    if not now or now.lower() == "unknown":
+        if linux_session_is_wayland():
+            LOG.info(
+                "inject: cannot verify frontmost app on Wayland (expected context %r); "
+                "aborting keystroke inject to avoid corrupting another window.",
+                cap,
+            )
+            return (
+                False,
+                "Wayland: cannot verify which app is focused after expansion. "
+                "Inject cancelled — copy the expansion from logs or use an X11 session / evdev.",
+            )
+        return False, (
+            f"Cannot read the focused application (expected {cap!r}). "
+            "Refusing inject so backspaces are not sent into the wrong window."
+        )
+    c0, n0 = cap.lower(), now.lower()
+    if c0 == n0 or c0 in n0 or n0 in c0:
+        return True, ""
+    return (
+        False,
+        f"Wrong window is focused ({now!r}; capture was from {cap!r}). "
+        "Inject cancelled (original app may have closed or refocus failed).",
+    )

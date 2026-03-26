@@ -11,6 +11,35 @@ from app.utils.log import get_logger
 LOG = get_logger(__name__)
 
 
+def focused_control_is_password_field() -> bool:
+    """True if the focused control or an ancestor is flagged as a password field."""
+    import uiautomation as auto
+
+    c = auto.GetFocusedControl()
+    if c is None:
+        return False
+    cur = c
+    for _ in range(10):
+        if cur is None:
+            break
+        try:
+            if bool(getattr(cur, "IsPassword", False)):
+                return True
+        except Exception:
+            pass
+        try:
+            ct = (cur.ControlTypeName or "").lower()
+            if "password" in ct:
+                return True
+        except Exception:
+            pass
+        try:
+            cur = cur.GetParentControl()
+        except Exception:
+            break
+    return False
+
+
 def replace_substring_in_focused_element(old: str, new: str, *, match_last: bool = True) -> bool:
     import uiautomation as auto
 
