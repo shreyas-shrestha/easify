@@ -11,6 +11,7 @@ from pynput.keyboard import Controller, Key, Listener
 
 from app.config.settings import Settings
 from app.engine.buffer import CaptureBuffer, TriggerState
+from app.engine.guards import is_safe_phrase_tokens, is_safe_word
 from app.engine.live_word import LiveFixCooldown, LiveWordResolver
 from app.engine.service import ExpansionJob, ExpansionService
 from app.keyboard.keys import pynput_key_char, pynput_skip_key
@@ -108,12 +109,21 @@ class KeyboardListener:
                     self._live_cooldown.mark()
                     return
         rep = self._live_resolver.resolve(word)
-        if not rep or rep == word:
+        if rep and rep != word:
+            self._perform_live_replace(word, rep)
+            if self._phrase_deque is not None:
+                self._phrase_deque.clear()
+            self._live_cooldown.mark()
             return
-        self._perform_live_replace(word, rep)
-        if self._phrase_deque is not None:
-            self._phrase_deque.clear()
-        self._live_cooldown.mark()
+
+        if self.settings.live_cache_enrich and self.settings.live_cache:
+            if self._phrase_deque is not None and len(self._phrase_deque) >= 2:
+                phrase = " ".join(self._phrase_deque)
+                toks = phrase.split()
+                if is_safe_phrase_tokens(toks, min_len=self.settings.live_min_word_len):
+                    self.service.schedule_live_cache_enrich_phrase(phrase)
+            elif is_safe_word(word, min_len=self.settings.live_min_word_len):
+                self.service.schedule_live_cache_enrich_word(word)
 
     def _perform_live_replace(self, old_word: str, new_text: str) -> None:
         if self._delete_n is None:

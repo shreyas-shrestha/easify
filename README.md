@@ -80,6 +80,7 @@ See `data/config.example.toml` in the repo.
 | `EASIFY_TRIGGER` | Prefix (default `///`) |
 | `EASIFY_SNIPPETS` | Single snippets JSON path (overrides default path list) |
 | `EASIFY_CACHE_DB` | SQLite cache file (default `~/.config/easify/cache.db`) |
+| `EASIFY_CACHE_TTL_SEC` | If &gt; `0`, drop a cache row when `now - created_at` exceeds this (seconds). `0` = keep forever |
 | `EASIFY_FUZZY_SCORE` | `rapidfuzz` cutoff **0–100** (default `82`) |
 | `EASIFY_FUZZY_MAX_KEYS` | Max snippet keys scanned for fuzzy (default `5000`) |
 | `EASIFY_VERBOSE` | `1` = log layer timings |
@@ -107,14 +108,14 @@ Opt-in: `EASIFY_LIVE_AUTOCORRECT=1`. While **idle** (not in `///`…`Enter` capt
 2. Autocorrect dictionary — exact key (`word.lower()`)  
 3. Snippet — exact key  
 4. Snippet — fuzzy (`rapidfuzz.fuzz.ratio`), only if **score &gt; `EASIFY_LIVE_FUZZY_THRESHOLD`** (default 92)  
-5. SQLite cache — `easify:live_word:v1` + word (filled by enrichment / learning, not by live)  
-6. No match → **do nothing**
+5. SQLite cache — `easify:live_word:v1` + token (written by **`///` AI**, optional **background enrich**, not on the hot path)  
+6. No match → **no instant replace**; if `EASIFY_LIVE_CACHE_ENRICH=1`, Easify may **enqueue** an async Ollama job to fill that cache key (same event loop as `///`, rate-limited — typing never blocks on it)
 
 **Guards** (reject word → no replace): `len(word) < EASIFY_LIVE_MIN_WORD_LEN` (default 3), entire token `isupper()`, leading capital, any digit, `_` `.` `/`, or `startswith("http")`. **Cooldown:** default **150 ms** between live replacements (`EASIFY_LIVE_COOLDOWN_MS`). Injection: delete **word + boundary space**, then **`replacement + space`** via `Controller.type` when possible; clipboard is fallback (`EASIFY_LIVE_CLIPBOARD_FALLBACK=1`).
 
 **Listener:** `KEY` → if capture active, handle `///`; else feed live buffer; on Space, resolve + maybe replace.
 
-Phrase intents (“im going too” → “I'm going to”) → future **phrase buffer** + async AI + cache.
+With **`EASIFY_PHRASE_BUFFER_MAX` &gt; 0**, multi-word phrases use the same stages; async enrich can target the whole phrase when the buffer has two or more tokens.
 
 | Variable | Default | Meaning |
 |----------|---------|---------|
@@ -131,7 +132,13 @@ Phrase intents (“im going too” → “I'm going to”) → future **phrase b
 | `EASIFY_PHRASE_BUFFER_MAX` | `0` | Last *N* words for phrase correction (`0` = off); try phrase before single-word |
 | `EASIFY_PERF` | off | Log per-stage timings (ms) for capture + live resolution |
 | `EASIFY_INJECT_TYPE_FIRST` | on | `///` expansion: `Controller.type` before clipboard paste (better undo) |
-| `EASIFY_METRICS` | off | `1` → persist counters under `~/.config/easify/metrics.json` (`live_replacements`, `capture_injections`) |
+| `EASIFY_METRICS` | off | `1` → persist counters under `~/.config/easify/metrics.json` (`live_replacements`, `capture_injections`, `live_enrich_*`) |
+| `EASIFY_LIVE_CACHE_ENRICH` | off | After deterministic live miss, background Ollama → SQLite live-cache (`source=bg`) |
+| `EASIFY_LIVE_ENRICH_MIN_LEN` | `4` | Min word length to enqueue single-token enrich |
+| `EASIFY_LIVE_ENRICH_MAX_PER_MINUTE` | `12` | Soft cap on queued enrich jobs per rolling minute (`0` = unlimited) |
+| `EASIFY_LIVE_ENRICH_MAX_CONCURRENT` | `2` | Max simultaneous Ollama calls for enrich |
+| `EASIFY_LIVE_ENRICH_QUEUE_MAX` | `32` | `asyncio` queue size (drops when full) |
+| `EASIFY_LIVE_ENRICH_SKIP_SAME` | on | If model returns the same text as input, do not `put` |
 | `EASIFY_LIVE_FUZZY_CUTOFF` | — | **Deprecated:** maps to threshold ≈ cutoff−1 if set |
 | `EASIFY_LIVE_FIX_COOLDOWN` | — | **Deprecated:** seconds → ms for cooldown if set |
 
@@ -139,7 +146,7 @@ Phrase intents (“im going too” → “I'm going to”) → future **phrase b
 
 - **Installer / auto-start:** LaunchAgent (macOS), systemd user unit (Linux), Task Scheduler (Windows).
 - **GUI:** settings, cache stats, snippet editor.
-- **Background AI enrichment** to populate live cache (never blocks typing).
+- **Richer enrichment:** promotion of hot cache rows into snippets; embedding / semantic cache.
 
 ## Development
 

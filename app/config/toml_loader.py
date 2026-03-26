@@ -118,6 +118,31 @@ def apply_toml_to_settings(obj: Any, data: Mapping[str, Any]) -> None:
     )
     take_bool("live_use_clipboard_fallback", "EASIFY_LIVE_CLIPBOARD_FALLBACK", key="live_clipboard_fallback")
     take_bool("prewarm", "EASIFY_PREWARM", key="prewarm")
+    take_int("cache_ttl_sec", "EASIFY_CACHE_TTL_SEC", key="cache_ttl_sec", lo=0, hi=86400 * 365)
+    take_bool("live_cache_enrich", "EASIFY_LIVE_CACHE_ENRICH", key="live_cache_enrich")
+    take_int("live_enrich_min_len", "EASIFY_LIVE_ENRICH_MIN_LEN", key="live_enrich_min_len", lo=1, hi=64)
+    take_int(
+        "live_enrich_max_per_minute",
+        "EASIFY_LIVE_ENRICH_MAX_PER_MINUTE",
+        key="live_enrich_max_per_minute",
+        lo=0,
+        hi=600,
+    )
+    take_int(
+        "live_enrich_max_concurrent",
+        "EASIFY_LIVE_ENRICH_MAX_CONCURRENT",
+        key="live_enrich_max_concurrent",
+        lo=1,
+        hi=8,
+    )
+    take_int(
+        "live_enrich_queue_max",
+        "EASIFY_LIVE_ENRICH_QUEUE_MAX",
+        key="live_enrich_queue_max",
+        lo=4,
+        hi=256,
+    )
+    take_bool("live_enrich_skip_same", "EASIFY_LIVE_ENRICH_SKIP_SAME", key="live_enrich_skip_same")
     take_int("phrase_buffer_max", "EASIFY_PHRASE_BUFFER_MAX", key="phrase_buffer_max", lo=0, hi=20)
     take_bool("perf", "EASIFY_PERF", key="perf")
     take_bool("inject_prefer_type", "EASIFY_INJECT_TYPE_FIRST", key="inject_prefer_type")

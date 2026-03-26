@@ -57,9 +57,11 @@ def main() -> None:
         service.prewarm_cache()
 
     LOG.info(
-        "Easify layers L1→L3 | snippets=%s paths | model=%s",
+        "Easify L1→L3 | snippets=%s paths | model=%s | cache_ttl=%ss | live_enrich=%s",
         len(settings.snippets_paths),
         settings.ollama_model,
+        settings.cache_ttl_sec or "off",
+        "on" if settings.live_cache_enrich else "off",
     )
 
     stop = threading.Event()

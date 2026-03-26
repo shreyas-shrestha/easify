@@ -48,6 +48,7 @@ class Settings:
     autocorrect_path: Optional[Path] = None
     warmup_prompts_path: Optional[Path] = None
     cache_db_path: Path = field(default_factory=lambda: _config_dir() / "cache.db")
+    cache_ttl_sec: int = field(default_factory=lambda: max(0, int(_env("CACHE_TTL_SEC", "0"))))
 
     fuzzy_score_cutoff: int = field(default_factory=lambda: max(60, min(100, int(_env("FUZZY_SCORE", "82")))))
     fuzzy_max_keys: int = field(default_factory=lambda: int(_env("FUZZY_MAX_KEYS", "5000")))
@@ -60,6 +61,19 @@ class Settings:
     live_cooldown_ms: int = field(default_factory=lambda: max(0, int(_env("LIVE_COOLDOWN_MS", "150"))))
     live_use_clipboard_fallback: bool = field(default_factory=lambda: _env_bool("LIVE_CLIPBOARD_FALLBACK", True))
     prewarm: bool = field(default_factory=lambda: _env_bool("PREWARM", False))
+
+    live_cache_enrich: bool = field(default_factory=lambda: _env_bool("LIVE_CACHE_ENRICH", False))
+    live_enrich_min_len: int = field(default_factory=lambda: max(3, min(48, int(_env("LIVE_ENRICH_MIN_LEN", "4")))))
+    live_enrich_max_per_minute: int = field(
+        default_factory=lambda: max(0, min(600, int(_env("LIVE_ENRICH_MAX_PER_MINUTE", "12"))))
+    )
+    live_enrich_max_concurrent: int = field(
+        default_factory=lambda: max(1, min(8, int(_env("LIVE_ENRICH_MAX_CONCURRENT", "2"))))
+    )
+    live_enrich_queue_max: int = field(
+        default_factory=lambda: max(4, min(256, int(_env("LIVE_ENRICH_QUEUE_MAX", "32"))))
+    )
+    live_enrich_skip_same: bool = field(default_factory=lambda: _env_bool("LIVE_ENRICH_SKIP_SAME", True))
 
     phrase_buffer_max: int = field(default_factory=lambda: max(0, min(20, int(_env("PHRASE_BUFFER_MAX", "0")))))
     perf: bool = field(default_factory=lambda: _env_bool("PERF", False))

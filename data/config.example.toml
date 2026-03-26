@@ -18,3 +18,14 @@ prewarm = false
 perf = false
 inject_prefer_type = true
 metrics = false
+
+# Drop SQLite cache rows older than N seconds (0 = never). Compares wall clock to created_at.
+# cache_ttl_sec = 0
+
+# After live deterministic miss, asynchronously call Ollama to fill live-cache keys (never blocks typing).
+# live_cache_enrich = false
+# live_enrich_min_len = 4
+# live_enrich_max_per_minute = 12
+# live_enrich_max_concurrent = 2
+# live_enrich_queue_max = 32
+# live_enrich_skip_same = true

@@ -2,6 +2,19 @@
 
 from __future__ import annotations
 
+LIVE_WORD_ENRICH = (
+    "The user typed a single word in running prose. If it is misspelled or a clear typo, "
+    "output ONLY the corrected word. If it is already correct, output the exact same word. "
+    "One word only unless a contraction requires two. No quotes, no explanation."
+)
+
+LIVE_PHRASE_ENRICH = (
+    "The user typed a short phrase in running prose. Fix spelling and obvious grammar only. "
+    "Output ONLY the corrected phrase. Keep the same approximate length and token order. "
+    "No quotes, no explanation."
+)
+
+
 DEFAULT = (
     "You are a silent text expander and lookup tool. The user types a short intent. "
     "Infer exactly the final text they want inserted. "

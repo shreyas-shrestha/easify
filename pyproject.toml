@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "easify"
-version = "0.3.1"
+version = "0.3.2"
 description = "Cross-platform AI text expansion: layered snippets, autocorrect, cache, local Ollama"
 readme = "README.md"
 requires-python = ">=3.9"

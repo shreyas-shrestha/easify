@@ -3,18 +3,22 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import threading
 import time
+from collections import deque
 from dataclasses import dataclass
 from typing import Any, Callable, Optional
 
 import httpx
 
-from app.cache.store import SqliteExpansionCache
-from app.config.settings import Settings
-from app.engine.pipeline import ExpansionPipeline
+from app.ai import prompts
 from app.ai.ollama import OllamaClient
 from app.autocorrect.engine import AutocorrectEngine
+from app.cache.store import SqliteExpansionCache
+from app.config.settings import Settings
+from app.engine.live_word import live_cache_prompt
+from app.engine.pipeline import ExpansionPipeline
 from app.snippets.engine import SnippetEngine
 from app.utils import clipboard as cb
 from app.utils.log import get_logger
@@ -29,6 +33,14 @@ class ExpansionJob:
     delete_count: int
 
 
+@dataclass(frozen=True)
+class LiveEnrichJob:
+    dedup_key: str
+    cache_prompt: str
+    user_text: str
+    system: str
+
+
 class ExpansionService:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
@@ -38,7 +50,7 @@ class ExpansionService:
             max_keys=settings.fuzzy_max_keys,
         )
         self.autocorrect = AutocorrectEngine(settings.autocorrect_path)
-        self.cache = SqliteExpansionCache(settings.cache_db_path)
+        self.cache = SqliteExpansionCache(settings.cache_db_path, entry_ttl_sec=settings.cache_ttl_sec)
         self.ollama = OllamaClient(
             settings.ollama_url,
             settings.ollama_model,
@@ -53,9 +65,15 @@ class ExpansionService:
             verbose=settings.verbose,
             perf=settings.perf,
         )
+        self.metrics: Optional[Metrics] = (
+            Metrics(settings.cache_db_path.parent / "metrics.json") if settings.metrics_enabled else None
+        )
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._thread: Optional[threading.Thread] = None
         self._queue: Optional[asyncio.Queue[ExpansionJob]] = None
+        self._enrich_queue: Optional[asyncio.Queue[LiveEnrichJob]] = None
+        self._enrich_inflight: set[str] = set()
+        self._enrich_rate_window: deque[float] = deque()
         self._ready = threading.Event()
         self._inject_busy = threading.Event()
         self._delete_fn: Optional[Callable[[int], None]] = None
@@ -76,21 +94,151 @@ class ExpansionService:
     def inject_busy(self) -> threading.Event:
         return self._inject_busy
 
+    def _enrich_under_rate_cap(self) -> bool:
+        cap = self.settings.live_enrich_max_per_minute
+        if cap <= 0:
+            return True
+        now = time.monotonic()
+        while self._enrich_rate_window and self._enrich_rate_window[0] < now - 60.0:
+            self._enrich_rate_window.popleft()
+        return len(self._enrich_rate_window) < cap
+
+    def _record_enrich_queued(self) -> None:
+        self._enrich_rate_window.append(time.monotonic())
+
+    def schedule_live_cache_enrich_word(self, word: str) -> None:
+        if not self.settings.live_cache_enrich or not self.settings.live_cache:
+            return
+        if self._loop is None or self._enrich_queue is None:
+            return
+        w = word.strip()
+        if len(w) < self.settings.live_enrich_min_len or len(w) > 64:
+            return
+        if not self._enrich_under_rate_cap():
+            return
+        ck = live_cache_prompt(w)
+        model = self.ollama.model
+        if self.cache.get(model, ck):
+            return
+        dk = f"{model}\x00{ck}"
+        if dk in self._enrich_inflight:
+            return
+        self._enrich_inflight.add(dk)
+        job = LiveEnrichJob(
+            dedup_key=dk,
+            cache_prompt=ck,
+            user_text=w,
+            system=prompts.LIVE_WORD_ENRICH,
+        )
+        fut = asyncio.run_coroutine_threadsafe(self._enqueue_live_enrich(job), self._loop)
+
+        def _cb(f: asyncio.Future) -> None:
+            try:
+                f.result()
+            except Exception as e:
+                LOG.debug("enqueue live enrich: %s", e)
+                self._enrich_inflight.discard(job.dedup_key)
+
+        fut.add_done_callback(_cb)
+
+    def schedule_live_cache_enrich_phrase(self, phrase: str) -> None:
+        if not self.settings.live_cache_enrich or not self.settings.live_cache:
+            return
+        if self._loop is None or self._enrich_queue is None:
+            return
+        p = re.sub(r"\s+", " ", phrase.strip())
+        if len(p) < 5 or len(p) > 240:
+            return
+        if not self._enrich_under_rate_cap():
+            return
+        ck = live_cache_prompt(p)
+        model = self.ollama.model
+        if self.cache.get(model, ck):
+            return
+        dk = f"{model}\x00{ck}"
+        if dk in self._enrich_inflight:
+            return
+        self._enrich_inflight.add(dk)
+        job = LiveEnrichJob(
+            dedup_key=dk,
+            cache_prompt=ck,
+            user_text=p,
+            system=prompts.LIVE_PHRASE_ENRICH,
+        )
+        fut = asyncio.run_coroutine_threadsafe(self._enqueue_live_enrich(job), self._loop)
+
+        def _cb(f: asyncio.Future) -> None:
+            try:
+                f.result()
+            except Exception as e:
+                LOG.debug("enqueue live enrich phrase: %s", e)
+                self._enrich_inflight.discard(job.dedup_key)
+
+        fut.add_done_callback(_cb)
+
+    async def _enqueue_live_enrich(self, job: LiveEnrichJob) -> None:
+        if self._enrich_queue is None:
+            self._enrich_inflight.discard(job.dedup_key)
+            return
+        if self._enrich_queue.full():
+            self._enrich_inflight.discard(job.dedup_key)
+            return
+        await self._enrich_queue.put(job)
+        self._record_enrich_queued()
+        if self.metrics is not None:
+            self.metrics.incr("live_enrich_queued")
+
+    async def _run_live_enrich_job(self, client: httpx.AsyncClient, job: LiveEnrichJob) -> None:
+        model = self.ollama.model
+        if self.cache.get(model, job.cache_prompt):
+            return
+        try:
+            text = await self.ollama.generate(client, job.user_text, job.system)
+        except Exception as e:
+            LOG.debug("live enrich ollama: %s", e)
+            return
+        t = (text or "").strip()
+        if not t:
+            return
+        if self.settings.live_enrich_skip_same and t.lower() == job.user_text.lower():
+            return
+        self.cache.put(model, job.cache_prompt, t, source="bg")
+        if self.metrics is not None:
+            self.metrics.incr("live_enrich_cached")
+        if self.settings.verbose:
+            LOG.info("live cache enriched key=%r", job.cache_prompt[:48])
+
+    async def _live_enrich_worker(self, client: httpx.AsyncClient) -> None:
+        assert self._enrich_queue is not None
+        sem = asyncio.Semaphore(self.settings.live_enrich_max_concurrent)
+        while True:
+            job = await self._enrich_queue.get()
+            try:
+                async with sem:
+                    await self._run_live_enrich_job(client, job)
+            except Exception as e:
+                LOG.debug("live enrich job error: %s", e)
+            finally:
+                self._enrich_inflight.discard(job.dedup_key)
+
     def start(self) -> None:
-        box: list[Any] = []
+        qmax = max(4, self.settings.live_enrich_queue_max)
 
         def runner() -> None:
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             self._loop = loop
             self._queue = asyncio.Queue()
-            box.append(self._queue)
+            self._enrich_queue = asyncio.Queue(maxsize=qmax)
             self._ready.set()
 
             async def main_co() -> None:
                 timeout = httpx.Timeout(self.settings.ollama_timeout_s, connect=10.0)
                 async with httpx.AsyncClient(timeout=timeout) as client:
-                    await self._consume(client)
+                    await asyncio.gather(
+                        self._consume(client),
+                        self._live_enrich_worker(client),
+                    )
 
             loop.run_until_complete(main_co())
 

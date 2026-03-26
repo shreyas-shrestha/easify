@@ -18,9 +18,10 @@ def _cache_key(model: str, normalized_prompt: str) -> str:
 class SqliteExpansionCache:
     """Stores generations for instant replay; tracks source for learning."""
 
-    def __init__(self, db_path: Path) -> None:
+    def __init__(self, db_path: Path, *, entry_ttl_sec: int = 0) -> None:
         self._path = db_path
         self._lock = threading.Lock()
+        self._entry_ttl_sec = max(0, int(entry_ttl_sec))
         db_path.parent.mkdir(parents=True, exist_ok=True)
         self._init_schema()
 
@@ -63,9 +64,17 @@ class SqliteExpansionCache:
         with self._lock:
             conn = self._connect()
             try:
-                cur = conn.execute("SELECT response FROM ai_cache WHERE key = ?", (k,))
+                cur = conn.execute("SELECT response, created_at FROM ai_cache WHERE key = ?", (k,))
                 row = cur.fetchone()
                 if row:
+                    if self._entry_ttl_sec > 0:
+                        try:
+                            created = float(row["created_at"])
+                        except (TypeError, ValueError):
+                            created = now
+                        if now - created > float(self._entry_ttl_sec):
+                            conn.execute("DELETE FROM ai_cache WHERE key = ?", (k,))
+                            return None
                     conn.execute(
                         "UPDATE ai_cache SET hit_count = hit_count + 1, last_used = ? WHERE key = ?",
                         (now, k),
