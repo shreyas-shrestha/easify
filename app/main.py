@@ -163,6 +163,36 @@ def main() -> None:
         debug=settings.debug_keys,
     )
 
+    if settings.engine_v2:
+        from app.engine.engine import EasifyEngine
+        from app.engine.router import EngineRouter
+        from app.policy.policy import BehaviorPolicy
+        from app.pipelines.deps import DefaultLivePipelineDeps
+
+        def _build_live_deps(policy: BehaviorPolicy) -> DefaultLivePipelineDeps:
+            return DefaultLivePipelineDeps(
+                autoc=service.autocorrect,
+                snippets=service.snippets,
+                cache=service.cache_service,
+                model=service.cache_model_id,
+                min_word_len=settings.live_min_word_len,
+                fuzzy_enabled=policy.live.fuzzy,
+                cache_enabled=policy.live.cache,
+                fuzzy_threshold=settings.live_fuzzy_threshold,
+                perf=settings.perf,
+            )
+
+        router = EngineRouter(
+            service=service,
+            build_live_deps=_build_live_deps,
+            on_live_replace=lambda old, new: listener._perform_live_replace(old, new),
+            schedule_enrich_word=service.schedule_live_cache_enrich_word,
+            schedule_enrich_phrase=service.schedule_live_cache_enrich_phrase,
+            min_word_len_for_enrich=settings.live_min_word_len,
+        )
+        listener._easify_engine = EasifyEngine(settings=settings, router=router)
+        LOG.info("EASIFY_ENGINE_V2 input-engine path enabled")
+
     if settings.palette_hotkey.strip():
         try:
             from pynput import keyboard as kb
@@ -229,7 +259,7 @@ def main() -> None:
                 pass
         if service.metrics is not None:
             service.metrics.flush()
-        service.cache.close()
+        service.cache_service.close()
 
     darwin_tray_on_main = settings.tray_enabled and platform.system() == "Darwin"
 

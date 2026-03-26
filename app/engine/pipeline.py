@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import time
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Optional, Union
 
 import httpx
 
 from app.ai import prompts
 from app.ai.chat_provider import ChatProvider
 from app.autocorrect.engine import AutocorrectEngine
+from app.cache.service import CacheService
 from app.cache.store import SqliteExpansionCache
 from app.engine.expansion_contracts import CacheTouchHandler, ExpansionLayer, ExpansionOutcome, l3_layer
 from app.engine.l0_compute import FxRateCache, try_l0_async
@@ -35,7 +36,7 @@ class ExpansionPipeline:
         *,
         snippets: SnippetEngine,
         autocorrect: AutocorrectEngine,
-        cache: SqliteExpansionCache,
+        cache: Union[SqliteExpansionCache, CacheService],
         llm: ChatProvider,
         fx_cache: FxRateCache,
         semantic_index: Optional["SnippetSemanticIndex"] = None,
@@ -46,7 +47,7 @@ class ExpansionPipeline:
     ) -> None:
         self.snippets = snippets
         self.autocorrect = autocorrect
-        self.cache = cache
+        self.cache: CacheService = cache if isinstance(cache, CacheService) else CacheService(cache)
         self.llm = llm
         self.fx_cache = fx_cache
         self.semantic_index = semantic_index
@@ -155,7 +156,7 @@ class ExpansionPipeline:
         user_prompt, system = prompts.classify(corrected)
         ck = _cache_prompt(self.llm.cache_model_id, user_prompt, system)
         t = time.perf_counter()
-        cached, hit_count, src = self.cache.lookup(self.llm.cache_model_id, ck)
+        cached, hit_count, src = self.cache.lookup_capture(self.llm.cache_model_id, ck)
         stage_ms["cache"] = (time.perf_counter() - t) * 1000.0
         if cached:
             self._notify_cache_touch(ck, cached, hit_count, src)
@@ -226,7 +227,7 @@ class ExpansionPipeline:
             clipboard_snippet=clipboard_snippet,
         )
         ck = _cache_prompt(self.llm.cache_model_id, user_prompt, system_full)
-        cached, hit_count, src = self.cache.lookup(self.llm.cache_model_id, ck)
+        cached, hit_count, src = self.cache.lookup_capture(self.llm.cache_model_id, ck)
         if not cached:
             return None
         self._notify_cache_touch(ck, cached, hit_count, src)
@@ -261,7 +262,7 @@ class ExpansionPipeline:
             LOG.info("L3 generate (ms): %s", round((time.perf_counter() - t_ai) * 1000.0, 3))
         layer = l3_layer(self.llm.name)
         if text:
-            self.cache.put(self.llm.cache_model_id, ck, text, source="ai")
+            self.cache.store_ai_result(self.llm.cache_model_id, ck, text, source="ai")
         ms = (time.perf_counter() - t0) * 1000.0
         if self._verbose:
             LOG.info("L3 done (%s ms)", round(ms, 2))

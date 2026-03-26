@@ -16,6 +16,7 @@ import httpx
 from app.ai import prompts
 from app.ai.factory import build_chat_provider
 from app.autocorrect.engine import AutocorrectEngine
+from app.cache.service import CacheService
 from app.cache.store import SqliteExpansionCache
 from app.config.settings import Settings
 from app.context.focus import (
@@ -24,9 +25,11 @@ from app.context.focus import (
     layer_warrants_pre_inject_refocus,
     refocus_if_needed_for_inject,
 )
+from app.engine.actions import ActionType
 from app.engine.l0_compute import FxRateCache
 from app.engine.live_word import live_cache_prompt
 from app.engine.pending_tail import PendingExpansionTail
+from app.engine.preview_gate import resolve_capture_preview_async
 from app.engine.pipeline import ExpansionPipeline
 from app.engine.tray_controller import TrayController
 from app.engine.types import ExpansionJob, LiveEnrichJob, TraySnapshot, UndoFrame
@@ -61,6 +64,7 @@ class ExpansionService:
         )
         self.autocorrect = AutocorrectEngine(settings.autocorrect_path)
         self.cache = SqliteExpansionCache(settings.cache_db_path, entry_ttl_sec=settings.cache_ttl_sec)
+        self.cache_service = CacheService(self.cache)
         self.fx_cache = FxRateCache(settings.cache_db_path.parent / "fx_rates.json")
         self.llm = build_chat_provider(settings)
         self.semantic_index = None
@@ -72,7 +76,7 @@ class ExpansionService:
         self.pipeline = ExpansionPipeline(
             snippets=self.snippets,
             autocorrect=self.autocorrect,
-            cache=self.cache,
+            cache=self.cache_service,
             llm=self.llm,
             fx_cache=self.fx_cache,
             semantic_index=self.semantic_index,
@@ -326,7 +330,7 @@ class ExpansionService:
             return
         ck = live_cache_prompt(w)
         model = self.llm.cache_model_id
-        if self.cache.get(model, ck):
+        if self.cache_service.get(model, ck):
             return
         dk = f"{model}\x00{ck}"
         if not self._enrich_try_claim(dk):
@@ -360,7 +364,7 @@ class ExpansionService:
             return
         ck = live_cache_prompt(p)
         model = self.llm.cache_model_id
-        if self.cache.get(model, ck):
+        if self.cache_service.get(model, ck):
             return
         dk = f"{model}\x00{ck}"
         if not self._enrich_try_claim(dk):
@@ -396,7 +400,7 @@ class ExpansionService:
 
     async def _run_live_enrich_job(self, client: httpx.AsyncClient, job: LiveEnrichJob) -> None:
         model = self.llm.cache_model_id
-        if self.cache.get(model, job.cache_prompt):
+        if self.cache_service.get(model, job.cache_prompt):
             return
         try:
             text = await self.llm.generate(client, job.user_text, job.system)
@@ -408,7 +412,7 @@ class ExpansionService:
             return
         if self.settings.live_enrich_skip_same and t.lower() == job.user_text.lower():
             return
-        self.cache.put(model, job.cache_prompt, t, source="bg")
+        self.cache_service.store_ai_result(model, job.cache_prompt, t, source="bg")
         if self.metrics is not None:
             self.metrics.incr("live_enrich_cached")
         if self.settings.verbose:
@@ -527,32 +531,30 @@ class ExpansionService:
                         error="empty expansion",
                     )
                     continue
-                prev = outcome.text
-                short = prev if len(prev) <= 100 else prev[:97] + "…"
+                result_preview = outcome.text
+                short = result_preview if len(result_preview) <= 100 else result_preview[:97] + "…"
                 self.tray_set_idle(short)
-                if self.settings.expansion_preview:
-                    from app.ui.preview import confirm_expansion
-
-                    ok = await asyncio.to_thread(confirm_expansion, outcome.text)
-                    if not ok:
-                        self._discard_pending_tail(job)
-                        self.tray_set_idle("preview cancelled")
-                        self._journal_expansion(
-                            job,
-                            layer=outcome.layer,
-                            result_text=outcome.text,
-                            ok=False,
-                            error="preview cancelled",
-                        )
-                        continue
+                preview_act = await resolve_capture_preview_async(self.settings, outcome.text)
+                if preview_act.type == ActionType.NOOP:
+                    self._discard_pending_tail(job)
+                    self.tray_set_idle("preview cancelled")
+                    self._journal_expansion(
+                        job,
+                        layer=outcome.layer,
+                        result_text=outcome.text,
+                        ok=False,
+                        error="preview cancelled",
+                    )
+                    continue
+                inject_text = preview_act.text or outcome.text
                 await self._wait_tail_quiet_async(job)
                 inject_kind = await asyncio.to_thread(
-                    self._apply_replacement, job, outcome.text, outcome.layer
+                    self._apply_replacement, job, inject_text, outcome.layer
                 )
                 self._journal_expansion(
                     job,
                     layer=outcome.layer,
-                    result_text=outcome.text,
+                    result_text=inject_text,
                     ok=bool(inject_kind),
                     error="" if inject_kind else "inject did not complete",
                     inject=inject_kind,
@@ -805,7 +807,7 @@ class ExpansionService:
 
     def preload_cache_metadata(self) -> None:
         """Log cache stats + optional warmup file listing (no automatic LLM fan-out)."""
-        st = self.cache.stats()
+        st = self.cache_service.stats()
         LOG.info("cache entries=%s total_hits=%s", st["entries"], st["total_hits"])
         p = self.settings.warmup_prompts_path
         if p and p.is_file():
@@ -836,7 +838,7 @@ class ExpansionService:
             w = item.strip()
             if not w:
                 continue
-            self.cache.peek(m, live_cache_prompt(w.lower()))
+            self.cache_service.peek(m, live_cache_prompt(w.lower()))
             n += 1
         self.snippets.reload()
         self.autocorrect.reload()

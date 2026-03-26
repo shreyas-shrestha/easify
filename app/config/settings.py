@@ -148,6 +148,9 @@ class Settings:
     backend: str = field(default_factory=lambda: _env("BACKEND", "pynput"))
     clipboard_restore: bool = field(default_factory=lambda: _env_bool("CLIPBOARD_RESTORE", True))
 
+    engine_v2: bool = field(default_factory=lambda: _env_bool("ENGINE_V2", False))
+    settings_preset: str = field(default_factory=lambda: _env("PRESET", "").strip().lower())
+
     debug_keys: bool = field(default_factory=lambda: _env_bool("DEBUG", False))
     verbose: bool = field(default_factory=lambda: _env_bool("VERBOSE", False))
 
@@ -241,6 +244,17 @@ class Settings:
         expansion_log_override = os.environ.get("EASIFY_EXPANSION_LOG_PATH")
         if expansion_log_override and str(expansion_log_override).strip():
             self.expansion_log_path = Path(os.path.expanduser(str(expansion_log_override).strip()))
+        self._apply_settings_preset()
+
+    def _apply_settings_preset(self) -> None:
+        p = (self.settings_preset or "").strip().lower()
+        if p == "minimal":
+            self.semantic_snippets = False
+            self.live_cache_enrich = False
+            self.prewarm = False
+            self.startup_health_check = False
+        elif p in ("input_engine", "engine_v2"):
+            self.engine_v2 = True
 
     def user_snippets_path(self) -> Path:
         """Primary user-writable snippets file (for promotions and UI)."""

@@ -16,6 +16,8 @@ activation_prefix = true
 # palette_hotkey_alt = "<cmd>+<alt>+e>"
 # tray = true
 # capture_max_chars = 4000
+# Input-engine refactor: context → policy → router → pipelines (set EASIFY_ENGINE_V2=1 or engine_v2 = true)
+# engine_v2 = false
 
 trigger = "//"
 # Close capture with the same delimiter (inline, no Enter). Set to "" for Enter-only submit.

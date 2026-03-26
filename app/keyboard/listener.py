@@ -6,13 +6,18 @@ import threading
 import time
 from collections import deque
 from contextlib import contextmanager
-from typing import Callable, Iterator, Optional
+from typing import TYPE_CHECKING, Callable, Iterator, Optional
+
+if TYPE_CHECKING:
+    from app.engine.engine import EasifyEngine
 
 from pynput.keyboard import Controller, Key, Listener
 
 from app.config.settings import Settings
 from app.context.focus import get_focused_app_name_fresh
 from app.engine.buffer import CaptureBuffer, TriggerState
+from app.engine.events import CaptureSubmitPayload, EngineEvent, EngineEventType, LivePhrasePayload, LiveWordPayload
+from app.keyboard import buffer as input_buffer
 from app.engine.guards import is_safe_phrase_tokens, is_safe_word, text_suggests_ime_mid_composition
 from app.engine.live_word import LiveFixCooldown, LiveWordResolver
 from app.engine.service import ExpansionJob, ExpansionService
@@ -68,9 +73,11 @@ class KeyboardListener:
         )
         self._live_cooldown = LiveFixCooldown(settings.live_cooldown_ms / 1000.0)
         self._live_replace_lock = threading.Lock()
-        # Live «no //» path: word/phrase replace on Space. Run whenever any stage or phrase buffer is enabled
-        # (previously gated only on live_autocorrect, which broke fuzzy+snippet+cache with autocorrect off).
-        if (
+        self._easify_engine: Optional["EasifyEngine"] = None
+        # Live «no //» path: word/phrase replace on Space. With EASIFY_ENGINE_V2, EasifyEngine handles resolution.
+        if settings.engine_v2:
+            self._live_resolver = None
+        elif (
             settings.live_autocorrect
             or settings.live_fuzzy
             or settings.live_cache
@@ -80,7 +87,7 @@ class KeyboardListener:
             self._live_resolver = LiveWordResolver(
                 snippets=service.snippets,
                 autocorrect=service.autocorrect,
-                cache=service.cache,
+                cache=service.cache_service,
                 model=service.cache_model_id,
                 min_word_len=settings.live_min_word_len,
                 fuzzy_enabled=settings.live_fuzzy,
@@ -88,6 +95,11 @@ class KeyboardListener:
                 fuzzy_threshold=settings.live_fuzzy_threshold,
                 perf=settings.perf,
             )
+
+    def _live_capable(self) -> bool:
+        if self.settings.engine_v2 and self._easify_engine is not None:
+            return True
+        return self._live_resolver is not None
 
     def _inject_depth_get(self) -> int:
         with self._inject_depth_lock:
@@ -138,7 +150,7 @@ class KeyboardListener:
         return " ".join(self._rolling_words)
 
     def _handle_live_key(self, key: object, ch: Optional[str]) -> None:
-        if self._live_resolver is None:
+        if not self._live_capable():
             return
         if ch == "\b":
             if self._live_chars:
@@ -157,7 +169,7 @@ class KeyboardListener:
         self._live_clear()
 
     def _live_flush(self) -> None:
-        if self._live_resolver is None:
+        if not self._live_capable():
             self._live_clear()
             return
         word = "".join(self._live_chars)
@@ -174,6 +186,23 @@ class KeyboardListener:
             return
         if not self._live_cooldown.can_fix():
             return
+        if self.settings.engine_v2 and self._easify_engine is not None:
+            if self._phrase_deque is not None:
+                self._phrase_deque.append(word)
+                if len(self._phrase_deque) >= 2:
+                    phrase = " ".join(self._phrase_deque)
+                    replaced = self._easify_engine.handle_event(input_buffer.live_phrase_completed(phrase))
+                    if replaced:
+                        self._phrase_deque.clear()
+                        self._live_cooldown.mark()
+                        return
+            replaced = self._easify_engine.handle_event(input_buffer.live_word_completed(word))
+            if replaced:
+                if self._phrase_deque is not None:
+                    self._phrase_deque.clear()
+                self._live_cooldown.mark()
+            return
+
         if self._phrase_deque is not None:
             self._phrase_deque.append(word)
             if len(self._phrase_deque) >= 2:
@@ -203,7 +232,7 @@ class KeyboardListener:
 
     def _live_flush_context_only(self) -> None:
         """Update rolling / phrase buffers without live replace (expansion tail in flight)."""
-        if self._live_resolver is None:
+        if not self._live_capable():
             self._live_clear()
             return
         word = "".join(self._live_chars)
@@ -217,7 +246,7 @@ class KeyboardListener:
             self._phrase_deque.append(word)
 
     def _handle_live_key_context_only(self, key: object, ch: Optional[str]) -> None:
-        if self._live_resolver is None:
+        if not self._live_capable():
             return
         if ch == "\b":
             if self._live_chars:
@@ -293,6 +322,20 @@ class KeyboardListener:
             if self.settings.pre_inject_refocus
             else ""
         )
+        if self.settings.engine_v2 and self._easify_engine is not None:
+            self._easify_engine.handle_event(
+                EngineEvent(
+                    EngineEventType.CAPTURE_SUBMIT,
+                    CaptureSubmitPayload(
+                        capture_text=run_prompt,
+                        delete_count=dc,
+                        undo_restore=undo,
+                        prior_words=self._prior_context_string(),
+                        focused_app_at_submit=focused,
+                    ),
+                )
+            )
+            return
         self.service.submit(
             ExpansionJob(
                 capture=run_prompt,
@@ -453,7 +496,7 @@ class KeyboardListener:
 
                 if ch is not None:
                     self.service.append_expansion_tail_char(ch)
-                if self._live_resolver is not None:
+                if self._live_capable():
                     self._handle_live_key_context_only(key, ch)
                 else:
                     self._context_idle_key(ch)
@@ -494,7 +537,7 @@ class KeyboardListener:
                     self._live_clear()
                     return
 
-            if self._live_resolver is not None:
+            if self._live_capable():
                 self._handle_live_key(key, ch)
             else:
                 self._context_idle_key(ch)
@@ -546,7 +589,7 @@ class KeyboardListener:
         self._setup_inject(self._ctrl)
         self._listener = Listener(on_press=self._on_press)
         self._listener.start()
-        extra = " + live word buffer" if self._live_resolver else ""
+        extra = " + live word buffer" if self._live_capable() else ""
         LOG.info(
             "listening (pynput) prefix=%s double_space=%s%s",
             self.trigger if self.settings.use_prefix_trigger else "(off)",

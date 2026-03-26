@@ -8,14 +8,15 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Optional, Union
 
+from app.cache.service import CacheService
+from app.cache.store import SqliteExpansionCache
 from app.engine.guards import is_safe_word, preserve_case, ratio_exceeds
 from app.engine.live_resolve import live_cache_prompt, resolve_live_phrase, resolve_live_word
 
 if TYPE_CHECKING:
     from app.autocorrect.engine import AutocorrectEngine
-    from app.cache.store import SqliteExpansionCache
     from app.snippets.engine import SnippetEngine
 
 __all__ = [
@@ -34,7 +35,7 @@ __all__ = [
 class LiveWordResolver:
     snippets: "SnippetEngine"
     autocorrect: "AutocorrectEngine"
-    cache: "SqliteExpansionCache"
+    cache: Union[SqliteExpansionCache, CacheService]
     model: str
     min_word_len: int = 3
     fuzzy_enabled: bool = True

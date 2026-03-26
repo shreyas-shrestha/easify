@@ -141,6 +141,7 @@ def apply_toml_to_settings(obj: Any, data: Mapping[str, Any]) -> None:
     take_bool("expansion_preview", "EASIFY_EXPANSION_PREVIEW", key="expansion_preview")
     take_str("evdev_device", "EASIFY_EVDEV_DEVICE", key="evdev_device")
     take_str("backend", "EASIFY_BACKEND", key="backend")
+    take_str("settings_preset", "EASIFY_PRESET", key="preset")
 
     take_int("fuzzy_score_cutoff", "EASIFY_FUZZY_SCORE", "OLLAMA_EXPANDER_FUZZY_SCORE", key="fuzzy_score", lo=50, hi=100)
     take_int("fuzzy_max_keys", "EASIFY_FUZZY_MAX_KEYS", "OLLAMA_EXPANDER_FUZZY_MAX_KEYS", key="fuzzy_max_keys", lo=100, hi=500_000)
@@ -199,6 +200,7 @@ def apply_toml_to_settings(obj: Any, data: Mapping[str, Any]) -> None:
     )
     take_bool("live_enrich_skip_same", "EASIFY_LIVE_ENRICH_SKIP_SAME", key="live_enrich_skip_same")
     take_int("phrase_buffer_max", "EASIFY_PHRASE_BUFFER_MAX", key="phrase_buffer_max", lo=0, hi=20)
+    take_bool("engine_v2", "EASIFY_ENGINE_V2", key="engine_v2")
     take_bool("perf", "EASIFY_PERF", key="perf")
     take_bool("inject_prefer_type", "EASIFY_INJECT_TYPE_FIRST", key="inject_prefer_type")
     take_bool("metrics_enabled", "EASIFY_METRICS", key="metrics")

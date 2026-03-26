@@ -9,16 +9,22 @@ from __future__ import annotations
 
 import re
 import time
-from typing import TYPE_CHECKING, Optional
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Optional, Union
 
+from rapidfuzz import fuzz
+
+from app.cache.service import CacheService
+from app.cache.store import SqliteExpansionCache
 from app.engine.guards import is_safe_phrase_tokens, is_safe_word, preserve_case, ratio_exceeds
 from app.snippets.template import expand_snippet_template
 from app.utils.log import get_logger
 
 if TYPE_CHECKING:
     from app.autocorrect.engine import AutocorrectEngine
-    from app.cache.store import SqliteExpansionCache
     from app.snippets.engine import SnippetEngine
+
+LiveCacheRead = Union[SqliteExpansionCache, CacheService]
 
 LOG = get_logger(__name__)
 
@@ -52,23 +58,37 @@ def _log_perf(stage_ms: Optional[dict[str, float]], name: str, t0: float) -> Non
         stage_ms[name] = (time.perf_counter() - t0) * 1000.0
 
 
-def resolve_live_word(
+@dataclass(frozen=True)
+class LiveWordDetail:
+    text: Optional[str]
+    source: str
+    fuzzy_ratio: float = 1.0
+
+
+@dataclass(frozen=True)
+class LivePhraseDetail:
+    text: Optional[str]
+    source: str
+    fuzzy_ratio: float = 1.0
+
+
+def resolve_live_word_detail(
     word: str,
     *,
     autocorrect: "AutocorrectEngine",
     snippets: "SnippetEngine",
-    cache: "SqliteExpansionCache",
+    cache: LiveCacheRead,
     model: str,
     min_word_len: int = 3,
     fuzzy_enabled: bool = True,
     cache_enabled: bool = True,
     fuzzy_threshold: int = 92,
     stage_ms: Optional[dict[str, float]] = None,
-) -> Optional[str]:
+) -> LiveWordDetail:
     t_all = time.perf_counter()
     if not is_safe_word(word, min_len=min_word_len):
         _log_perf(stage_ms, "guards", t_all)
-        return None
+        return LiveWordDetail(None, "guards")
     _log_perf(stage_ms, "guards", t_all)
 
     wl = word.lower()
@@ -81,7 +101,7 @@ def resolve_live_word(
     if r is not None:
         out = preserve_case(word, r)
         if out != word:
-            return out
+            return LiveWordDetail(out, "autocorrect")
 
     t0 = time.perf_counter()
     hit = snippets.resolve_exact(wl)
@@ -89,8 +109,8 @@ def resolve_live_word(
     if hit is not None and hit.value != word:
         if "\n" in hit.value or len(hit.value) > 2000:
             LOG.debug("skip huge snippet for live word")
-            return None
-        return _expand_if_snippet_template(hit.value)
+            return LiveWordDetail(None, "snippet_exact_skip")
+        return LiveWordDetail(_expand_if_snippet_template(hit.value), "snippet_exact")
 
     if fuzzy_enabled:
         t0 = time.perf_counter()
@@ -99,10 +119,11 @@ def resolve_live_word(
         _log_perf(stage_ms, "snippet_fuzzy", t0)
         if fz is not None and fz.value != word:
             if not ratio_exceeds(wl, fz.key, float(fuzzy_threshold)):
-                return None
+                return LiveWordDetail(None, "snippet_fuzzy_low")
             if "\n" in fz.value or len(fz.value) > 2000:
-                return None
-            return _expand_if_snippet_template(fz.value)
+                return LiveWordDetail(None, "snippet_fuzzy_skip")
+            fr = min(1.0, max(0.0, fuzz.ratio(wl, fz.key) / 100.0))
+            return LiveWordDetail(_expand_if_snippet_template(fz.value), "snippet_fuzzy", fr)
 
     if cache_enabled:
         t0 = time.perf_counter()
@@ -110,17 +131,17 @@ def resolve_live_word(
         cached = cache.get(model, ck)
         _log_perf(stage_ms, "cache", t0)
         if cached and cached.strip() and cached.strip() != word:
-            return cached.strip()
+            return LiveWordDetail(cached.strip(), "cache")
 
-    return None
+    return LiveWordDetail(None, "none")
 
 
-def resolve_live_phrase(
-    phrase: str,
+def resolve_live_word(
+    word: str,
     *,
     autocorrect: "AutocorrectEngine",
     snippets: "SnippetEngine",
-    cache: "SqliteExpansionCache",
+    cache: LiveCacheRead,
     model: str,
     min_word_len: int = 3,
     fuzzy_enabled: bool = True,
@@ -128,14 +149,38 @@ def resolve_live_phrase(
     fuzzy_threshold: int = 92,
     stage_ms: Optional[dict[str, float]] = None,
 ) -> Optional[str]:
-    """
-    Multi-word deterministic path (phrase buffer). Same stage order; autocorrect is per-token dict lookup.
-    """
+    return resolve_live_word_detail(
+        word,
+        autocorrect=autocorrect,
+        snippets=snippets,
+        cache=cache,
+        model=model,
+        min_word_len=min_word_len,
+        fuzzy_enabled=fuzzy_enabled,
+        cache_enabled=cache_enabled,
+        fuzzy_threshold=fuzzy_threshold,
+        stage_ms=stage_ms,
+    ).text
+
+
+def resolve_live_phrase_detail(
+    phrase: str,
+    *,
+    autocorrect: "AutocorrectEngine",
+    snippets: "SnippetEngine",
+    cache: LiveCacheRead,
+    model: str,
+    min_word_len: int = 3,
+    fuzzy_enabled: bool = True,
+    cache_enabled: bool = True,
+    fuzzy_threshold: int = 92,
+    stage_ms: Optional[dict[str, float]] = None,
+) -> LivePhraseDetail:
     t_all = time.perf_counter()
     words = phrase.split()
     if not is_safe_phrase_tokens(words, min_len=min_word_len):
         _log_perf(stage_ms, "phrase_guards", t_all)
-        return None
+        return LivePhraseDetail(None, "phrase_guards")
     _log_perf(stage_ms, "phrase_guards", t_all)
 
     t0 = time.perf_counter()
@@ -164,7 +209,7 @@ def resolve_live_phrase(
     _log_perf(stage_ms, "phrase_autocorrect", t0)
     corrected = " ".join(corrected_tokens)
     if changed and corrected != phrase:
-        return corrected
+        return LivePhraseDetail(corrected, "autocorrect")
 
     pl = re.sub(r"\s+", " ", phrase.lower().strip())
 
@@ -173,8 +218,8 @@ def resolve_live_phrase(
     _log_perf(stage_ms, "phrase_snippet_exact", t0)
     if hit is not None and hit.value != phrase:
         if "\n" in hit.value or len(hit.value) > 2000:
-            return None
-        return _expand_if_snippet_template(hit.value)
+            return LivePhraseDetail(None, "phrase_snippet_exact_skip")
+        return LivePhraseDetail(_expand_if_snippet_template(hit.value), "snippet_exact")
 
     if fuzzy_enabled:
         t0 = time.perf_counter()
@@ -183,10 +228,11 @@ def resolve_live_phrase(
         _log_perf(stage_ms, "phrase_snippet_fuzzy", t0)
         if fz is not None and fz.value != phrase:
             if not ratio_exceeds(pl, fz.key, float(fuzzy_threshold)):
-                return None
+                return LivePhraseDetail(None, "phrase_snippet_fuzzy_low")
             if "\n" in fz.value or len(fz.value) > 2000:
-                return None
-            return _expand_if_snippet_template(fz.value)
+                return LivePhraseDetail(None, "phrase_snippet_fuzzy_skip")
+            fr = min(1.0, max(0.0, fuzz.ratio(pl, fz.key) / 100.0))
+            return LivePhraseDetail(_expand_if_snippet_template(fz.value), "snippet_fuzzy", fr)
 
     if cache_enabled:
         t0 = time.perf_counter()
@@ -194,6 +240,33 @@ def resolve_live_phrase(
         cached = cache.get(model, ck)
         _log_perf(stage_ms, "phrase_cache", t0)
         if cached and cached.strip() and cached.strip() != phrase:
-            return cached.strip()
+            return LivePhraseDetail(cached.strip(), "cache")
 
-    return None
+    return LivePhraseDetail(None, "none")
+
+
+def resolve_live_phrase(
+    phrase: str,
+    *,
+    autocorrect: "AutocorrectEngine",
+    snippets: "SnippetEngine",
+    cache: LiveCacheRead,
+    model: str,
+    min_word_len: int = 3,
+    fuzzy_enabled: bool = True,
+    cache_enabled: bool = True,
+    fuzzy_threshold: int = 92,
+    stage_ms: Optional[dict[str, float]] = None,
+) -> Optional[str]:
+    return resolve_live_phrase_detail(
+        phrase,
+        autocorrect=autocorrect,
+        snippets=snippets,
+        cache=cache,
+        model=model,
+        min_word_len=min_word_len,
+        fuzzy_enabled=fuzzy_enabled,
+        cache_enabled=cache_enabled,
+        fuzzy_threshold=fuzzy_threshold,
+        stage_ms=stage_ms,
+    ).text
