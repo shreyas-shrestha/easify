@@ -657,11 +657,11 @@ def test_suppress_capture_for_url_scheme_slash_slash(monkeypatch: pytest.MonkeyP
         listener._recent_chars.clear()
         for ch in scheme:
             listener._recent_chars.append(ch)
-        assert listener._suppress_capture_for_url_scheme_slash_slash() is True
+        assert listener._capture_session.suppress_capture_for_url_scheme("//") is True
     listener._recent_chars.clear()
     for ch in "// TODO":
         listener._recent_chars.append(ch)
-    assert listener._suppress_capture_for_url_scheme_slash_slash() is False
+    assert listener._capture_session.suppress_capture_for_url_scheme("//") is False
 
 
 def test_capture_esc_cancels_without_submit(monkeypatch: pytest.MonkeyPatch, caplog) -> None:
@@ -689,11 +689,10 @@ def test_capture_esc_cancels_without_submit(monkeypatch: pytest.MonkeyPatch, cap
         trigger="//",
         enter_backspaces=svc.settings.enter_backspaces,
     )
-    listener._state = "capturing"
-    listener._capture_from_prefix = True
+    listener._capture_session.enter_from_prefix()
     listener._capture.push("x")
     listener._on_press(Key.esc)
-    assert listener._state == "idle"
+    assert not listener._capture_session.is_capturing()
     assert submitted == []
     assert any("cancelled (Esc)" in r.message for r in caplog.records)
 

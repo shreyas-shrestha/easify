@@ -1,4 +1,8 @@
-"""Buffer-layer helpers: construct EngineEvents from flushed tokens (listener remains key I/O only)."""
+"""
+Buffer-layer helpers: EngineEvents + capture submit metadata.
+
+Capture mode state machine lives in :mod:`app.keyboard.capture_fsm` (:class:`CaptureInputSession`).
+"""
 
 from __future__ import annotations
 
