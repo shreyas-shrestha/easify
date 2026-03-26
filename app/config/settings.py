@@ -59,6 +59,10 @@ class Settings:
     live_use_clipboard_fallback: bool = field(default_factory=lambda: _env_bool("LIVE_CLIPBOARD_FALLBACK", True))
     prewarm: bool = field(default_factory=lambda: _env_bool("PREWARM", False))
 
+    phrase_buffer_max: int = field(default_factory=lambda: max(0, min(20, int(_env("PHRASE_BUFFER_MAX", "0")))))
+    perf: bool = field(default_factory=lambda: _env_bool("PERF", False))
+    inject_prefer_type: bool = field(default_factory=lambda: _env_bool("INJECT_TYPE_FIRST", True))
+
     backend: str = field(default_factory=lambda: _env("BACKEND", "pynput"))
     clipboard_restore: bool = field(default_factory=lambda: _env_bool("CLIPBOARD_RESTORE", False))
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import threading
 import time
+from collections import deque
 from typing import Callable, Optional
 
 from pynput.keyboard import Controller, Key, Listener
@@ -47,6 +48,9 @@ class KeyboardListener:
 
         self._live_resolver: Optional[LiveWordResolver] = None
         self._live_chars: list[str] = []
+        self._phrase_deque: Optional[deque[str]] = (
+            deque(maxlen=settings.phrase_buffer_max) if settings.phrase_buffer_max > 0 else None
+        )
         self._live_cooldown = LiveFixCooldown(settings.live_cooldown_ms / 1000.0)
         if settings.live_autocorrect:
             self._live_resolver = LiveWordResolver(
@@ -58,10 +62,13 @@ class KeyboardListener:
                 fuzzy_enabled=settings.live_fuzzy,
                 cache_enabled=settings.live_cache,
                 fuzzy_threshold=settings.live_fuzzy_threshold,
+                perf=settings.perf,
             )
 
     def _live_clear(self) -> None:
         self._live_chars.clear()
+        if self._phrase_deque is not None:
+            self._phrase_deque.clear()
 
     def _handle_live_key(self, key: object, ch: Optional[str]) -> None:
         if self._live_resolver is None:
@@ -83,15 +90,29 @@ class KeyboardListener:
             self._live_clear()
             return
         word = "".join(self._live_chars)
-        self._live_clear()
+        self._live_chars.clear()
         if not word.strip():
+            if self._phrase_deque is not None:
+                self._phrase_deque.clear()
             return
         if not self._live_cooldown.can_fix():
             return
+        if self._phrase_deque is not None:
+            self._phrase_deque.append(word)
+            if len(self._phrase_deque) >= 2:
+                phrase = " ".join(self._phrase_deque)
+                rep = self._live_resolver.resolve_phrase(phrase)
+                if rep and rep != phrase:
+                    self._perform_live_replace(phrase, rep)
+                    self._phrase_deque.clear()
+                    self._live_cooldown.mark()
+                    return
         rep = self._live_resolver.resolve(word)
         if not rep or rep == word:
             return
         self._perform_live_replace(word, rep)
+        if self._phrase_deque is not None:
+            self._phrase_deque.clear()
         self._live_cooldown.mark()
 
     def _perform_live_replace(self, old_word: str, new_text: str) -> None:
@@ -225,9 +246,21 @@ class KeyboardListener:
             finally:
                 parent._inject_depth -= 1
 
+        def type_expansion(text: str) -> None:
+            parent._inject_depth += 1
+            try:
+                if hasattr(ctrl, "type"):
+                    ctrl.type(text)
+                else:
+                    for c in text:
+                        ctrl.press(c)
+                        ctrl.release(c)
+            finally:
+                parent._inject_depth -= 1
+
         parent._delete_n = delete_n
         parent._paste_text = paste_text
-        self.service.set_inject(delete_n, paste_text)
+        self.service.set_inject(delete_n, paste_text, type_expansion)
 
     def run_blocking(self, stop: threading.Event) -> None:
         self._ctrl = Controller()

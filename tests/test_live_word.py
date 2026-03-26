@@ -2,7 +2,8 @@ from pathlib import Path
 
 from app.autocorrect.engine import AutocorrectEngine
 from app.cache.store import SqliteExpansionCache
-from app.engine.live_word import LiveWordResolver, is_safe_word, live_cache_prompt, resolve_live_word
+from app.engine.live_resolve import live_cache_prompt, resolve_live_word
+from app.engine.live_word import LiveWordResolver, is_safe_word
 from app.snippets.engine import SnippetEngine
 
 

@@ -50,6 +50,7 @@ class ExpansionService:
             cache=self.cache,
             ollama=self.ollama,
             verbose=settings.verbose,
+            perf=settings.perf,
         )
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._thread: Optional[threading.Thread] = None
@@ -58,10 +59,17 @@ class ExpansionService:
         self._inject_busy = threading.Event()
         self._delete_fn: Optional[Callable[[int], None]] = None
         self._paste_fn: Optional[Callable[[str], None]] = None
+        self._type_fn: Optional[Callable[[str], None]] = None
 
-    def set_inject(self, delete_fn: Callable[[int], None], paste_fn: Callable[[str], None]) -> None:
+    def set_inject(
+        self,
+        delete_fn: Callable[[int], None],
+        paste_fn: Callable[[str], None],
+        type_fn: Optional[Callable[[str], None]] = None,
+    ) -> None:
         self._delete_fn = delete_fn
         self._paste_fn = paste_fn
+        self._type_fn = type_fn
 
     @property
     def inject_busy(self) -> threading.Event:
@@ -122,6 +130,12 @@ class ExpansionService:
             LOG.info("inject layer=%s delete=%s", layer, delete_count)
             self._delete_fn(delete_count)
             time.sleep(self.settings.after_delete_ms / 1000.0)
+            if self._type_fn is not None and self.settings.inject_prefer_type:
+                try:
+                    self._type_fn(text)
+                    return
+                except Exception as e:
+                    LOG.warning("type inject failed, using clipboard: %s", e)
             if self.settings.clipboard_restore:
                 prev = cb.get_clipboard()
                 try:

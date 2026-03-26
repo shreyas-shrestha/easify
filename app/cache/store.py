@@ -16,7 +16,7 @@ def _cache_key(model: str, normalized_prompt: str) -> str:
 
 
 class SqliteExpansionCache:
-    """Stores AI generations for instant replay (Layer 2)."""
+    """Stores generations for instant replay; tracks source for learning."""
 
     def __init__(self, db_path: Path) -> None:
         self._path = db_path
@@ -28,6 +28,12 @@ class SqliteExpansionCache:
         conn = sqlite3.connect(str(self._path), check_same_thread=False, isolation_level=None)
         conn.row_factory = sqlite3.Row
         return conn
+
+    def _migrate(self, conn: sqlite3.Connection) -> None:
+        cur = conn.execute("PRAGMA table_info(ai_cache)")
+        cols = {str(row[1]) for row in cur.fetchall()}
+        if "source" not in cols:
+            conn.execute("ALTER TABLE ai_cache ADD COLUMN source TEXT DEFAULT 'ai'")
 
     def _init_schema(self) -> None:
         with self._lock:
@@ -47,6 +53,7 @@ class SqliteExpansionCache:
                     """
                 )
                 conn.execute("CREATE INDEX IF NOT EXISTS idx_ai_cache_last ON ai_cache(last_used);")
+                self._migrate(conn)
             finally:
                 conn.close()
 
@@ -68,23 +75,26 @@ class SqliteExpansionCache:
                 conn.close()
         return None
 
-    def put(self, model: str, prompt: str, response: str) -> None:
+    def put(self, model: str, prompt: str, response: str, *, source: str = "ai") -> None:
         k = _cache_key(model, prompt.strip())
         now = time.time()
+        src = (source or "ai").strip()[:32] or "ai"
         with self._lock:
             conn = self._connect()
             try:
+                self._migrate(conn)
                 conn.execute(
                     """
-                    INSERT INTO ai_cache(key, prompt, response, model, hit_count, created_at, last_used)
-                    VALUES (?, ?, ?, ?, 1, ?, ?)
+                    INSERT INTO ai_cache(key, prompt, response, model, hit_count, created_at, last_used, source)
+                    VALUES (?, ?, ?, ?, 1, ?, ?, ?)
                     ON CONFLICT(key) DO UPDATE SET
                       response = excluded.response,
                       model = excluded.model,
+                      source = excluded.source,
                       hit_count = ai_cache.hit_count + 1,
                       last_used = excluded.last_used
                     """,
-                    (k, prompt, response, model, now, now),
+                    (k, prompt, response, model, now, now, src),
                 )
             finally:
                 conn.close()
@@ -99,15 +109,20 @@ class SqliteExpansionCache:
             finally:
                 conn.close()
 
-    def top_keys(self, limit: int = 100) -> list[tuple[str, int]]:
-        """For learning / warmup hints."""
+    def top_keys(self, limit: int = 100) -> list[tuple[str, int, str]]:
+        """For learning / warmup: prompt, hits, source."""
         with self._lock:
             conn = self._connect()
             try:
+                self._migrate(conn)
                 cur = conn.execute(
-                    "SELECT prompt, hit_count FROM ai_cache ORDER BY hit_count DESC LIMIT ?",
+                    """
+                    SELECT prompt, hit_count,
+                      COALESCE(source, 'ai') AS src
+                    FROM ai_cache ORDER BY hit_count DESC LIMIT ?
+                    """,
                     (limit,),
                 )
-                return [(str(r["prompt"]), int(r["hit_count"])) for r in cur.fetchall()]
+                return [(str(r["prompt"]), int(r["hit_count"]), str(r["src"])) for r in cur.fetchall()]
             finally:
                 conn.close()
