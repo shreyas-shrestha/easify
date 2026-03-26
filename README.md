@@ -1,6 +1,6 @@
 # Easify
 
-**Easify is a way to supercharge your writing. Turn short phrases you type into full text, definitions, fixes, unit conversions, snippets, question answers all embedded into your keyboard everywhere you write. 
+Easify is a way to supercharge your writing. Turn short phrases you type into full text, definitions, fixes, unit conversions, snippets, question answers all embedded into your keyboard everywhere you write. 
 
 ---
 
