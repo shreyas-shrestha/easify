@@ -131,6 +131,7 @@ def test_classify_does_not_over_route_to_convert() -> None:
         "emoji happy",
         "fix teh sentence",
         "draft weekly update",
+        "what is this song that goes like thank you for the happiest time of my life",
     ]:
         _, system = classify(query)
         assert system != CONVERT, f"should not be CONVERT for {query!r}"

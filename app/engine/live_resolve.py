@@ -56,6 +56,9 @@ def resolve_live_word(
     wl = word.lower()
     t0 = time.perf_counter()
     r = autocorrect.lookup_word(wl)
+    if r is None:
+        ac_cut = min(100, max(50, int(fuzzy_threshold) + 1))
+        r = autocorrect.lookup_word_fuzzy(wl, score_cutoff=ac_cut)
     _log_perf(stage_ms, "autocorrect", t0)
     if r is not None:
         out = preserve_case(word, r)
@@ -123,6 +126,9 @@ def resolve_live_phrase(
     for w in words:
         lw = w.lower()
         r = autocorrect.lookup_word(lw)
+        if r is None:
+            ac_cut = min(100, max(50, int(fuzzy_threshold) + 1))
+            r = autocorrect.lookup_word_fuzzy(lw, score_cutoff=ac_cut)
         if r is not None:
             nw = preserve_case(w, r)
             corrected_tokens.append(nw)

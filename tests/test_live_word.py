@@ -25,6 +25,14 @@ def test_is_safe_word_min_len_override() -> None:
     assert is_safe_word("a", min_len=2) is False
 
 
+def test_autocorrect_fuzzy_near_miss(tmp_path: Path) -> None:
+    ac_path = tmp_path / "ac.json"
+    ac_path.write_text('{"corrections": {"arguement": "argument"}}', encoding="utf-8")
+    ac = AutocorrectEngine(ac_path)
+    assert ac.lookup_word("arguemnt") is None
+    assert ac.lookup_word_fuzzy("arguemnt", score_cutoff=90) == "argument"
+
+
 def test_live_resolve_dict(tmp_path: Path) -> None:
     ac_path = tmp_path / "ac.json"
     ac_path.write_text('{"corrections": {"teh": "the"}}', encoding="utf-8")
@@ -79,6 +87,28 @@ def test_listener_live_resolver_none_when_all_live_stages_off(
         enter_backspaces=svc.settings.enter_backspaces,
     )
     assert listener._live_resolver is None
+
+
+def test_resolve_live_word_autocorrect_fuzzy(tmp_path: Path) -> None:
+    ac_path = tmp_path / "ac.json"
+    ac_path.write_text('{"corrections": {"arguement": "argument"}}', encoding="utf-8")
+    ac = AutocorrectEngine(ac_path)
+    p = tmp_path / "s.json"
+    p.write_text("{}", encoding="utf-8")
+    sn = SnippetEngine([p])
+    cache = SqliteExpansionCache(tmp_path / "c.db")
+    assert (
+        resolve_live_word(
+            "arguemnt",
+            autocorrect=ac,
+            snippets=sn,
+            cache=cache,
+            model="m",
+            fuzzy_enabled=False,
+            cache_enabled=False,
+        )
+        == "argument"
+    )
 
 
 def test_resolve_cache_without_fuzzy(tmp_path: Path) -> None:

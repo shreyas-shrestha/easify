@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import threading
 import time
-from typing import TYPE_CHECKING, Callable
+from typing import TYPE_CHECKING, Callable, Optional
 
 from app.utils.log import get_logger
 
@@ -30,7 +30,13 @@ def _icon_image(state: str):
     return img
 
 
-def run_tray_app(service: "ExpansionService", stop: threading.Event, on_quit: Callable[[], None]) -> None:
+def run_tray_app(
+    service: "ExpansionService",
+    stop: threading.Event,
+    on_quit: Callable[[], None],
+    *,
+    icon_holder: Optional[list] = None,
+) -> None:
     try:
         import pystray
         from pystray import Menu, MenuItem
@@ -55,6 +61,9 @@ def run_tray_app(service: "ExpansionService", stop: threading.Event, on_quit: Ca
     menu = Menu(MenuItem("Quit", _quit))
     icon = pystray.Icon("Easify", _icon_image("idle"), title="Easify", menu=menu)
     icon_ref.append(icon)
+    if icon_holder is not None:
+        icon_holder.clear()
+        icon_holder.append(icon)
 
     def poll() -> None:
         last_state = ""

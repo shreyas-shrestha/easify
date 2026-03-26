@@ -21,7 +21,11 @@ DEFAULT = (
     "You are a silent text expander and lookup tool. The user types a short intent. "
     "Infer exactly the final text they want inserted. "
     "Output ONLY that plain text: no explanations, markdown, code fences, or quotes. "
-    "No prefixes like 'Here is'. One best answer, short."
+    "No prefixes like 'Here is'. One best answer, short. "
+    "For lookups (song titles, names, facts): output the minimal correct text only—"
+    "typically the title and primary artist when asked for a song. "
+    "Do not add prices, royalties, statistics, or other trivia unless the user asked. "
+    "If you are unsure, say so briefly instead of guessing wrong artist/title."
 )
 
 FIX = (
@@ -52,10 +56,12 @@ EXPAND = (
     "Output ONLY the expanded text body—no preamble or quotes."
 )
 
+# "what is this song…" must NOT match—only quantity-style "what is 5 ft", "what is $10", etc.
 _RE_CONVERT_HINT = re.compile(
     r"""
     (?:
-      \b(?:convert|turn|change|what(?:'s|s|)\s+is)\b
+      \b(?:convert|turn|change)\b
+      | \bwhat(?:'s|s|)\s+is\s+(?:\d|[\$€£])
       | \b(?:how\s+(?:many|much|far))\b
       | \d+\s*(?:km|mi|ft|lbs?|kg|g|oz|m|cm|mm|in|yd|
                  mph|kph|celsius|fahrenheit|kelvin|

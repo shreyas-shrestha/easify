@@ -22,11 +22,13 @@ class AutocorrectEngine:
     def __init__(self, path: Optional[Path]) -> None:
         self._path = path
         self._dict: dict[str, str] = {}
+        self._keys_tuple: tuple[str, ...] = ()
         if path and path.is_file():
             self.reload()
 
     def reload(self) -> None:
         self._dict = {}
+        self._keys_tuple = ()
         if not self._path or not self._path.is_file():
             return
         try:
@@ -40,11 +42,33 @@ class AutocorrectEngine:
         for k, v in raw.items():
             if isinstance(k, str) and isinstance(v, str):
                 self._dict[k.lower()] = v
+        self._keys_tuple = tuple(self._dict.keys())
 
     def lookup_word(self, word: str) -> Optional[str]:
         if not word:
             return None
         return self._dict.get(word.lower())
+
+    def lookup_word_fuzzy(self, word: str, *, score_cutoff: int = 92) -> Optional[str]:
+        """Map typo → correction when :func:`rapidfuzz.fuzz.ratio` to some dict key ≥ cutoff."""
+        if not word or not self._dict:
+            return None
+        wl = word.lower()
+        if wl in self._dict:
+            return self._dict[wl]
+        keys = self._keys_tuple
+        if not keys:
+            return None
+        try:
+            from rapidfuzz import fuzz, process
+        except ImportError:
+            return None
+        lo = min(100, max(50, int(score_cutoff)))
+        m = process.extractOne(wl, keys, scorer=fuzz.ratio, score_cutoff=lo)
+        if m is None:
+            return None
+        key, _score, _idx = m
+        return self._dict.get(key)
 
     def apply_to_phrase(self, phrase: str) -> str:
         """Layer-1 token fix for capture text (preserves spacing style roughly)."""
@@ -61,6 +85,8 @@ class AutocorrectEngine:
                 out.append(p)
                 continue
             repl = self._dict.get(core.lower())
+            if repl is None:
+                repl = self.lookup_word_fuzzy(core, score_cutoff=93)
             if repl is not None:
                 if core.isupper():
                     repl = repl.upper()

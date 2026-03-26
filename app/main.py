@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import platform
 import shutil
 import signal
 import sys
@@ -127,6 +128,8 @@ def main() -> None:
     )
 
     stop = threading.Event()
+    # macOS: pystray/AppKit requires menu-bar work on the main thread; SIGINT needs icon.stop().
+    tray_icon_ref: list = []
     hotkey_listener = None
 
     listener = KeyboardListener(
@@ -175,28 +178,22 @@ def main() -> None:
         except Exception as e:
             LOG.warning("undo hotkey failed (%s); check pynput hotkey grammar", e)
 
-    if settings.tray_enabled:
-
-        def _tray_stop() -> None:
-            stop.set()
-
-        from app.ui.tray import run_tray_app
-
-        threading.Thread(
-            target=lambda: run_tray_app(service, stop, _tray_stop),
-            daemon=True,
-            name="easify-tray",
-        ).start()
-
-    def _stop(*_: object) -> None:
+    def _tray_stop() -> None:
         stop.set()
 
-    signal.signal(signal.SIGINT, _stop)
+    def _shutdown_signal(*_: object) -> None:
+        stop.set()
+        if tray_icon_ref:
+            try:
+                tray_icon_ref[0].stop()
+            except Exception:
+                pass
+
+    signal.signal(signal.SIGINT, _shutdown_signal)
     if hasattr(signal, "SIGTERM"):
-        signal.signal(signal.SIGTERM, _stop)
-    try:
-        listener.run_blocking(stop)
-    finally:
+        signal.signal(signal.SIGTERM, _shutdown_signal)
+
+    def _cleanup_run() -> None:
         if hotkey_listener is not None:
             try:
                 hotkey_listener.stop()
@@ -210,6 +207,46 @@ def main() -> None:
         if service.metrics is not None:
             service.metrics.flush()
         service.cache.close()
+
+    darwin_tray_on_main = settings.tray_enabled and platform.system() == "Darwin"
+
+    if darwin_tray_on_main:
+        from app.ui.tray import run_tray_app
+
+        def _listener_worker() -> None:
+            try:
+                listener.run_blocking(stop)
+            except Exception:
+                LOG.exception("keyboard listener thread exited")
+
+        lt = threading.Thread(target=_listener_worker, daemon=True, name="easify-listener")
+        lt.start()
+        try:
+            run_tray_app(service, stop, _tray_stop, icon_holder=tray_icon_ref)
+        finally:
+            stop.set()
+            if tray_icon_ref:
+                try:
+                    tray_icon_ref[0].stop()
+                except Exception:
+                    pass
+            lt.join(timeout=10.0)
+            _cleanup_run()
+        return
+
+    if settings.tray_enabled:
+        from app.ui.tray import run_tray_app
+
+        threading.Thread(
+            target=lambda: run_tray_app(service, stop, _tray_stop),
+            daemon=True,
+            name="easify-tray",
+        ).start()
+
+    try:
+        listener.run_blocking(stop)
+    finally:
+        _cleanup_run()
 
 
 if __name__ == "__main__":
