@@ -9,7 +9,9 @@ activation_prefix = true
 # tray = true
 # capture_max_chars = 4000
 
-trigger = "///"
+trigger = "//"
+# Close capture with the same delimiter (inline, no Enter). Set to "" for Enter-only submit.
+capture_close = "//"
 model = "phi3"
 # ollama_url = "http://127.0.0.1:11434/api/generate"
 
@@ -63,3 +65,10 @@ metrics = false
 # ui_secret_token = "generate-a-long-random-string"
 # cache_promote_max_keys = 500
 # double_space_settle_ms = 0
+# pre_inject_refocus = true
+# Re-activate the app that was frontmost when you closed the capture (fixes Terminal stealing inject).
+# inject_settle_ms = 55
+# Wait this long after the last «parallel tail» keystroke before inject (0 = off). Helps Notes when typing ahead.
+# inject_settle_max_wait_ms = 3000
+# inject_tail_via_cursor_left = true
+# Move left across parallel tail, delete only //capture//, type result (avoid erasing your continuing sentence).

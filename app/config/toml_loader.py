@@ -86,6 +86,7 @@ def apply_toml_to_settings(obj: Any, data: Mapping[str, Any]) -> None:
             pass
 
     take_str("trigger", "EASIFY_TRIGGER", "OLLAMA_EXPANDER_TRIGGER")
+    take_str("capture_close", "EASIFY_CAPTURE_CLOSE", key="capture_close")
     take_bool("use_prefix_trigger", "EASIFY_ACTIVATION_PREFIX", key="activation_prefix")
     take_bool("double_space_activation", "EASIFY_ACTIVATION_DOUBLE_SPACE", key="activation_double_space")
     take_int(
@@ -195,6 +196,20 @@ def apply_toml_to_settings(obj: Any, data: Mapping[str, Any]) -> None:
     take_int("backspace_delay_ms", "EASIFY_BACKSPACE_DELAY_MS", key="backspace_delay_ms", lo=0, hi=500)
     take_int("paste_delay_ms", "EASIFY_PASTE_DELAY_MS", key="paste_delay_ms", lo=0, hi=5000)
     take_int("after_delete_ms", "EASIFY_AFTER_DELETE_MS", key="after_delete_ms", lo=0, hi=2000)
+    take_bool("pre_inject_refocus", "EASIFY_PRE_INJECT_REFOCUS", key="pre_inject_refocus")
+    take_int("inject_settle_ms", "EASIFY_INJECT_SETTLE_MS", key="inject_settle_ms", lo=0, hi=2000)
+    take_int(
+        "inject_settle_max_wait_ms",
+        "EASIFY_INJECT_SETTLE_MAX_WAIT_MS",
+        key="inject_settle_max_wait_ms",
+        lo=50,
+        hi=30_000,
+    )
+    take_bool(
+        "inject_tail_via_cursor_left",
+        "EASIFY_INJECT_TAIL_CURSOR_LEFT",
+        key="inject_tail_via_cursor_left",
+    )
 
     take_bool("semantic_snippets", "EASIFY_SEMANTIC_SNIPPETS", key="semantic_snippets")
     take_str("semantic_model", "EASIFY_SEMANTIC_MODEL", key="semantic_model")

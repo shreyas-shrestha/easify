@@ -86,6 +86,29 @@ def test_currency_alias_passthrough_iso() -> None:
     assert _RE_FX.match(s) is not None
 
 
+def test_currency_normalize_multiword_russian_rubles() -> None:
+    from app.engine.l0_compute import _RE_FX, _normalize_currency_aliases
+
+    s = _normalize_currency_aliases("10 Russian rubles to USD")
+    assert _RE_FX.match(s) is not None
+    assert "RUB" in s and "USD" in s
+
+
+def test_currency_normalize_dollar_shorthand() -> None:
+    from app.engine.l0_compute import _RE_FX, _normalize_currency_aliases
+
+    s = _normalize_currency_aliases("convert $10 to rupees")
+    assert _RE_FX.match(s) is not None
+    assert "USD" in s and "INR" in s
+
+
+def test_l0_candidates_find_conversion_in_prose() -> None:
+    from app.engine.l0_compute import _l0_query_candidates
+
+    c = _l0_query_candidates("i am writing 10 rubles to USD right now")
+    assert any("10 rubles" in x and "USD" in x for x in c)
+
+
 # ── classify() CONVERT routing ──────────────────────────────────────────────
 
 
@@ -123,6 +146,35 @@ def test_fx_cache_lock_is_threading_lock(tmp_path: Path) -> None:
 
     fx = FxRateCache(tmp_path / "fx.json")
     assert isinstance(fx._conv_lock, type(threading.Lock()))
+
+
+def test_fx_cache_fallback_when_frankfurter_fails(tmp_path: Path) -> None:
+    from unittest.mock import AsyncMock, MagicMock
+
+    from app.engine.l0_compute import FxRateCache
+
+    fx = FxRateCache(tmp_path / "fx.json")
+
+    async def fake_get(url: str, **kwargs: object) -> MagicMock:
+        r = MagicMock()
+        if "frankfurter" in str(url):
+            raise OSError("unreachable")
+        r.raise_for_status = lambda: None
+        r.json = lambda: {
+            "result": "success",
+            "rates": {"RUB": 100.0},
+            "time_last_update_utc": "Thu, 1 Jan 2026 00:00:00 +0000",
+        }
+        return r
+
+    client = MagicMock()
+    client.get = AsyncMock(side_effect=fake_get)
+
+    async def _run():
+        return await fx.convert(client, 10.0, "USD", "RUB")
+
+    out = asyncio.run(_run())
+    assert out is not None and "1000" in out and "RUB" in out
 
 
 def test_fx_cache_same_currency_returns_immediately(tmp_path: Path) -> None:
@@ -258,3 +310,120 @@ def test_autocorrect_dictionary_coverage() -> None:
         result = eng.lookup_word(wrong)
         assert result == right, f"expected {wrong!r} → {right!r}, got {result!r}"
     assert len(eng._dict) >= 200, f"dictionary too small: {len(eng._dict)} entries"
+
+
+def test_expansion_parallel_tail_extends_delete_and_inject(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keystrokes after capture submit are buffered and merged at inject time."""
+    monkeypatch.setenv("EASIFY_TRAY", "0")
+    monkeypatch.setenv("EASIFY_INJECT_SETTLE_MS", "0")
+    from app.config.settings import Settings
+    from app.engine.service import ExpansionJob, ExpansionService, _PendingExpansionTail
+
+    svc = ExpansionService(Settings.load())
+    deleted: list[int] = []
+    typed: list[str] = []
+    lefts: list[int] = []
+
+    def delete_n(n: int) -> None:
+        deleted.append(n)
+
+    def paste_fn(t: str) -> None:
+        typed.append(t)
+
+    def cursor_left_n(n: int) -> None:
+        lefts.append(n)
+
+    svc.set_inject(
+        delete_n, paste_fn, type_fn=lambda s: typed.append(s), cursor_left_fn=cursor_left_n
+    )
+
+    job = ExpansionJob(capture="c", delete_count=10, undo_restore="//c//")
+    svc._pending_tails.append(_PendingExpansionTail(job=job))
+    with svc._pending_tails[0].lock:
+        svc._pending_tails[0].tail.extend(list(" hi"))
+
+    svc._apply_replacement(job, "OUT", "L-test")
+
+    assert lefts == [3]
+    assert deleted == [10]
+    assert typed == ["OUT"]
+    with svc._undo_lock:
+        undo = svc._undo
+    assert undo is not None
+    assert undo.injected == "OUT"
+    assert undo.restore == "//c// hi"
+
+
+def test_inject_tail_settle_waits_for_quiet(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("EASIFY_TRAY", "0")
+    monkeypatch.setenv("EASIFY_INJECT_SETTLE_MS", "100")
+    monkeypatch.setenv("EASIFY_INJECT_SETTLE_MAX_WAIT_MS", "5000")
+    import time
+
+    from app.config.settings import Settings
+    from app.engine.service import ExpansionJob, ExpansionService, _PendingExpansionTail
+
+    svc = ExpansionService(Settings.load())
+    job = ExpansionJob(capture="c", delete_count=10, undo_restore="//c//")
+    pe = _PendingExpansionTail(job=job)
+    svc._pending_tails.append(pe)
+    with pe.lock:
+        pe.tail.append("x")
+        pe.last_activity_mono = 1000.0
+
+    clock = [1000.0]
+
+    def fake_mono() -> float:
+        return clock[0]
+
+    monkeypatch.setattr(time, "monotonic", fake_mono)
+    sleeps: list[float] = []
+
+    def fake_sleep(d: float) -> None:
+        sleeps.append(d)
+        clock[0] += 0.15
+
+    monkeypatch.setattr(time, "sleep", fake_sleep)
+    svc._wait_tail_quiet(job)
+
+    assert sleeps, "expected settle loop to sleep once before idle>=settle"
+    with pe.lock:
+        assert pe.tail == ["x"]
+
+
+def test_inject_legacy_delete_through_tail_when_cursor_left_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("EASIFY_TRAY", "0")
+    monkeypatch.setenv("EASIFY_INJECT_SETTLE_MS", "0")
+    monkeypatch.setenv("EASIFY_INJECT_TAIL_CURSOR_LEFT", "0")
+    from app.config.settings import Settings
+    from app.engine.service import ExpansionJob, ExpansionService, _PendingExpansionTail
+
+    svc = ExpansionService(Settings.load())
+    deleted: list[int] = []
+    typed: list[str] = []
+
+    def delete_n(n: int) -> None:
+        deleted.append(n)
+
+    svc.set_inject(delete_n, lambda t: typed.append(t), type_fn=lambda s: typed.append(s))
+    job = ExpansionJob(capture="c", delete_count=10, undo_restore="//c//")
+    svc._pending_tails.append(_PendingExpansionTail(job=job))
+    with svc._pending_tails[0].lock:
+        svc._pending_tails[0].tail.extend(list(" hi"))
+    svc._apply_replacement(job, "OUT", "L-test")
+    assert deleted == [13]
+    assert typed == ["OUT hi"]
+
+
+def test_expansion_tail_discarded_on_empty_result(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("EASIFY_TRAY", "0")
+    from app.config.settings import Settings
+    from app.engine.service import ExpansionJob, ExpansionService, _PendingExpansionTail
+
+    svc = ExpansionService(Settings.load())
+    job = ExpansionJob(capture="x", delete_count=1, undo_restore="x")
+    svc._pending_tails.append(_PendingExpansionTail(job=job))
+    svc._discard_pending_tail(job)
+    assert not svc.has_pending_expansion_tail()

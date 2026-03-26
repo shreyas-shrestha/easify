@@ -44,6 +44,41 @@ class TriggerState:
 
 
 @dataclass
+class CloseDelimiterMatcher:
+    """Match a closing delimiter in a stream without committing it to the capture buffer."""
+
+    close: str
+    pending: str = ""
+
+    def feed(self, ch: str) -> list[tuple[str, Optional[str]]]:
+        """Events for one key: zero+ ('append', char) or one ('submit', None) at end of delimiter."""
+        out: list[tuple[str, Optional[str]]] = []
+        self.pending += ch
+        while True:
+            if not self.pending:
+                return out
+            if self.close.startswith(self.pending):
+                if len(self.pending) == len(self.close):
+                    self.pending = ""
+                    out.append(("submit", None))
+                    return out
+                return out
+            c0 = self.pending[0]
+            self.pending = self.pending[1:]
+            out.append(("append", c0))
+
+    def backspace(self) -> bool:
+        """Shrink pending partial delimiter; return True if we handled it (did not touch capture)."""
+        if self.pending:
+            self.pending = self.pending[:-1]
+            return True
+        return False
+
+    def reset(self) -> None:
+        self.pending = ""
+
+
+@dataclass
 class CaptureBuffer:
     max_chars: int = 4000
     chars: list[str] = field(default_factory=list)

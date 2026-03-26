@@ -36,7 +36,10 @@ EMOJI = (
 
 CONVERT = (
     "The user wants a unit or currency conversion. "
-    "Output ONLY the numeric result with unit (e.g. '30.48 cm')—no explanation."
+    "Output ONLY the compact numeric answer with unit or currency code "
+    "(e.g. '30.48 cm', '0.11 USD'). "
+    "No sentences, explanations, caveats, dates, or exchange-rate commentary. "
+    "Never answer in prose."
 )
 
 CODE = (

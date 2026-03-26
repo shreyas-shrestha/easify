@@ -3,13 +3,13 @@ Supercharge writing with llm-based text expansion anywhere you want to write, an
 
 Supercharge writing with LLM-based text expansion anywhere you type: clarification, spell-fix shortcuts, unit conversion, emoji, and semantic expansion — with **local Ollama**, **instant snippets**, **autocorrect**, and a **SQLite semantic cache**.
 
-Type a **trigger** (default `///`), **double-space** (optional), or a **palette hotkey** → enter capture → your intent, **Enter** → layers run (**L0 math/units/FX** first); if needed, **async** Ollama on a worker thread → result is pasted when ready. A **tray icon** shows idle / expanding / error so silent failures are rare.
+Type a **trigger** (default `//`), then your intent, then **close with the same delimiter again** (default `//…//`)—**or press Enter** to submit. **Double-space** (optional) or a **palette hotkey** also open capture. Expansion runs **in the background**: you can keep typing after the closing delimiter; when the result is ready, Easify deletes exactly **capture + what you typed since**, inserts **result + that tail**, so flow is not blocked waiting on the LLM. **Live** autocorrect/fuzzy replace is paused while a capture is in flight so the tail buffer stays consistent. Set `EASIFY_CAPTURE_CLOSE=` empty for **Enter-only** submit (legacy). A **tray icon** shows idle / expanding / error.
 
 ## Architecture (multi-layer latency)
 
 | Layer | Speed | Components |
 |-------|--------|------------|
-| **L0** | &lt;1 ms (local) / ~50–200 ms (FX fetch) | `l0_compute`: **pint** unit conversion, safe **AST** arithmetic, simple **date** phrases, **Frankfurter** currency (cached daily to `~/.config/easify/fx_rates.json`) |
+| **L0** | &lt;1 ms (local) / ~50–200 ms (FX fetch) | `l0_compute`: **pint** unit conversion, safe **AST** arithmetic, simple **date** phrases, **FX** via Frankfurter with **open.er-api.com** fallback if Frankfurter is slow/unreachable (cache in `~/.config/easify/fx_rates.json`) |
 | **L1** | &lt;5 ms | `AutocorrectEngine` (token fixes on capture), `SnippetEngine` **exact** match |
 | **L2** | ~1–10 ms | `SnippetEngine` **fuzzy** (`rapidfuzz`), `SqliteExpansionCache` (**WAL** + persistent connection; **O(1)** by key) |
 | **L3** | async / background | `OllamaClient` (`httpx`); results **cached** on success |
@@ -34,11 +34,13 @@ At least one must be enabled (defaults: **prefix on**, double-space off, palette
 
 | Mode | Env | Notes |
 |------|-----|--------|
-| Prefix | `EASIFY_ACTIVATION_PREFIX=1` (default) | Requires `EASIFY_TRIGGER` (e.g. `///`) |
+| Prefix | `EASIFY_ACTIVATION_PREFIX=1` (default) | Requires `EASIFY_TRIGGER` (default `//`) and optional `EASIFY_CAPTURE_CLOSE` (default `//`) |
 | Double-space | `EASIFY_ACTIVATION_DOUBLE_SPACE=1` | Second **Space** within `EASIFY_DOUBLE_SPACE_WINDOW_MS` (default 400 ms) opens capture; two spaces are deleted |
 | Palette | `EASIFY_PALETTE_HOTKEY='<ctrl>+<shift>+e>'` | pynput `GlobalHotKeys` grammar; opens a small **tkinter** window to type intent (no prefix) |
 
 **Tray:** `EASIFY_TRAY=1` (default) — **pystray** + **Pillow**; Quit stops the listener. Disable with `EASIFY_TRAY=0` on headless servers.
+
+**Injection target:** While you wait for L0/L3, macOS may focus **Terminal** (or another window). Easify records the frontmost app when you **finish** the capture and calls **Activate** right before inject (`EASIFY_PRE_INJECT_REFOCUS=1`, default). If Notes still ignores synthetic typing, try `EASIFY_INJECT_TYPE_FIRST=0` (clipboard paste). **Parallel tail:** after you keep typing while a capture resolves, Easify waits **`EASIFY_INJECT_SETTLE_MS`** (default 55 ms) after your last key before inject. It then **moves the caret left** across that tail, **deletes only** `//…//`, and types the **result** — your sentence is **not** backspaced away first (set `EASIFY_INJECT_TAIL_CURSOR_LEFT=0` to restore the legacy delete-through-tail behavior if an app mis-handles arrow keys).
 
 **L0 examples:** `5 inches to cm`, `100 USD to EUR`, `2 + 2*3`, `today + 14 days`.
 
@@ -138,7 +140,8 @@ See `data/config.example.toml` in the repo.
 | `EASIFY_PALETTE_HOTKEY` | e.g. `<ctrl>+<shift>+e>` — floating palette |
 | `EASIFY_CAPTURE_MAX_CHARS` | Max captured intent length (default `4000`) |
 | `EASIFY_TRAY` | `1` = system tray icon + status (default) |
-| `EASIFY_TRIGGER` | Prefix (default `///`) when prefix activation is on |
+| `EASIFY_TRIGGER` | Prefix (default `//`) when prefix activation is on |
+| `EASIFY_CAPTURE_CLOSE` | Close delimiter for inline submit (default `//`); empty = Enter-only |
 | `EASIFY_SNIPPETS` | Single snippets JSON path (overrides default path list) |
 | `EASIFY_CACHE_DB` | SQLite cache file (default `~/.config/easify/cache.db`) |
 | `EASIFY_CACHE_TTL_SEC` | If &gt; `0`, drop a cache row when `now - created_at` exceeds this (seconds). `0` = keep forever |
@@ -174,18 +177,18 @@ Intent hints: `emoji happy`, `fix teh`, `convert 5 ft to meters` (see `app/ai/pr
 
 **Philosophy:** deterministic first — **no AI on this path** (keeps latency predictable).
 
-Opt-in: `EASIFY_LIVE_AUTOCORRECT=1`. While **idle** (not in `///`…`Enter` capture): each key goes to `LiveWordBuffer`; on **Space** or **Enter** the committed word runs `resolve_live_word()` in **`app/engine/live_word.py`** in this **exact order**:
+Opt-in: `EASIFY_LIVE_AUTOCORRECT=1`. While **idle** (not in `//` capture): each key goes to `LiveWordBuffer`; on **Space** or **Enter** the committed word runs `resolve_live_word()` in **`app/engine/live_word.py`** in this **exact order**:
 
 1. `is_safe_word` (guards)  
 2. Autocorrect dictionary — exact key (`word.lower()`)  
 3. Snippet — exact key  
 4. Snippet — fuzzy (`rapidfuzz.fuzz.ratio`), only if **score &gt; `EASIFY_LIVE_FUZZY_THRESHOLD`** (default 92)  
-5. SQLite cache — `easify:live_word:v1` + token (written by **`///` AI**, optional **background enrich**, not on the hot path)  
-6. No match → **no instant replace**; if `EASIFY_LIVE_CACHE_ENRICH=1`, Easify may **enqueue** an async Ollama job to fill that cache key (same event loop as `///`, rate-limited — typing never blocks on it)
+5. SQLite cache — `easify:live_word:v1` + token (written by **capture / AI**, optional **background enrich**, not on the hot path)  
+6. No match → **no instant replace**; if `EASIFY_LIVE_CACHE_ENRICH=1`, Easify may **enqueue** an async Ollama job to fill that cache key (same event loop as capture jobs, rate-limited — typing never blocks on it)
 
 **Guards** (reject word → no replace): `len(word) < EASIFY_LIVE_MIN_WORD_LEN` (default 3), entire token `isupper()`, leading capital, any digit, `_` `.` `/`, or `startswith("http")`. **Cooldown:** default **150 ms** between live replacements (`EASIFY_LIVE_COOLDOWN_MS`). Injection: delete **word + boundary space**, then **`replacement + space`** via `Controller.type` when possible; clipboard is fallback (`EASIFY_LIVE_CLIPBOARD_FALLBACK=1`).
 
-**Listener:** `KEY` → if capture active, handle `///`; else feed live buffer; on Space, resolve + maybe replace.
+**Listener:** `KEY` → if capture active, handle delimited `//…//`; else feed live buffer; on Space, resolve + maybe replace.
 
 With **`EASIFY_PHRASE_BUFFER_MAX` &gt; 0**, multi-word phrases use the same stages; async enrich can target the whole phrase when the buffer has two or more tokens.
 
@@ -198,12 +201,13 @@ With **`EASIFY_PHRASE_BUFFER_MAX` &gt; 0**, multi-word phrases use the same stag
 | `EASIFY_LIVE_FUZZY_THRESHOLD` | `92` | Accept fuzzy match only if `ratio &gt;` this |
 | `EASIFY_LIVE_COOLDOWN_MS` | `150` | Min ms between live replacements |
 | `EASIFY_LIVE_CLIPBOARD_FALLBACK` | on | Use clipboard if `type()` fails |
-| `EASIFY_TRIGGER` | `///` | Intent capture prefix |
+| `EASIFY_TRIGGER` | `//` | Intent capture prefix |
+| `EASIFY_CAPTURE_CLOSE` | `//` | Close delimiter (empty = Enter-only) |
 | `EASIFY_MODEL` | `phi3` | Model id (alias for `OLLAMA_MODEL`; also used for cache keys) |
 | `EASIFY_PREWARM` | off | Startup: reload corpora + touch warmup list in SQLite (no LLM) |
 | `EASIFY_PHRASE_BUFFER_MAX` | `0` | Last *N* words for phrase correction (`0` = off); try phrase before single-word |
 | `EASIFY_PERF` | off | Log per-stage timings (ms) for capture + live resolution |
-| `EASIFY_INJECT_TYPE_FIRST` | on | `///` expansion: `Controller.type` before clipboard paste (better undo) |
+| `EASIFY_INJECT_TYPE_FIRST` | on | Capture expansion: `Controller.type` before clipboard paste (better undo) |
 | `EASIFY_METRICS` | off | `1` → persist counters under `~/.config/easify/metrics.json` (`live_replacements`, `capture_injections`, `live_enrich_*`) |
 | `EASIFY_LIVE_CACHE_ENRICH` | off | After deterministic live miss, background Ollama → SQLite live-cache (`source=bg`) |
 | `EASIFY_LIVE_ENRICH_MIN_LEN` | `4` | Min word length to enqueue single-token enrich |

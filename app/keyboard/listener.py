@@ -10,7 +10,8 @@ from typing import Callable, Optional
 from pynput.keyboard import Controller, Key, Listener
 
 from app.config.settings import Settings
-from app.engine.buffer import CaptureBuffer, TriggerState
+from app.context.focus import get_focused_app_name_fresh
+from app.engine.buffer import CaptureBuffer, CloseDelimiterMatcher, TriggerState
 from app.engine.guards import is_safe_phrase_tokens, is_safe_word
 from app.engine.live_word import LiveFixCooldown, LiveWordResolver
 from app.engine.service import ExpansionJob, ExpansionService
@@ -50,6 +51,7 @@ class KeyboardListener:
 
         self._dbl_armed = False
         self._dbl_last_mono = 0.0
+        self._close_matcher: Optional[CloseDelimiterMatcher] = None
 
         self._rolling_words: Optional[deque[str]] = (
             deque(maxlen=settings.context_buffer_words) if settings.context_buffer_words > 0 else None
@@ -168,6 +170,85 @@ class KeyboardListener:
             elif is_safe_word(word, min_len=self.settings.live_min_word_len):
                 self.service.schedule_live_cache_enrich_word(word)
 
+    def _live_flush_context_only(self) -> None:
+        """Update rolling / phrase buffers without live replace (expansion tail in flight)."""
+        if self._live_resolver is None:
+            self._live_clear()
+            return
+        word = "".join(self._live_chars)
+        self._live_chars.clear()
+        if not word.strip():
+            if self._phrase_deque is not None:
+                self._phrase_deque.clear()
+            return
+        self._push_rolling_word(word)
+        if self._phrase_deque is not None:
+            self._phrase_deque.append(word)
+
+    def _handle_live_key_context_only(self, key: object, ch: Optional[str]) -> None:
+        if self._live_resolver is None:
+            return
+        if ch == "\b":
+            if self._live_chars:
+                self._live_chars.pop()
+            return
+        if ch is not None and len(ch) == 1 and ch.isalpha():
+            self._live_chars.append(ch)
+            return
+        if ch in (" ", "\n"):
+            self._live_flush_context_only()
+            return
+        if self._live_chars and ch is not None and len(ch) == 1 and ch in ",.;:!?)]}\"'":
+            self._live_flush_context_only()
+            return
+        self._live_clear()
+
+    def _submit_capture(self, *, entered_with_newline: bool) -> None:
+        raw = self._capture.text()
+        run_prompt = raw.strip()
+        if self._close_matcher is not None:
+            self._close_matcher.reset()
+        self._close_matcher = None
+        from_prefix = self._capture_from_prefix
+        self._state = _STATE_IDLE
+        self._capture.clear()
+        self._trigger.reset()
+        self._capture_from_prefix = False
+        if not run_prompt:
+            LOG.warning("empty intent — type between delimiters or press Enter")
+            return
+        close = self.settings.capture_close.strip()
+        if from_prefix and self.settings.use_prefix_trigger and self.trigger:
+            if close and not entered_with_newline:
+                dc = len(self.trigger) + len(raw) + len(close)
+                undo = f"{self.trigger}{raw}{close}"
+            else:
+                dc = len(self.trigger) + len(raw) + max(0, self.enter_backspaces)
+                undo = f"{self.trigger}{raw}"
+        else:
+            if close and not entered_with_newline:
+                dc = len(raw) + len(close)
+                undo = f"{raw}{close}"
+            else:
+                dc = len(raw) + max(0, self.enter_backspaces)
+                undo = raw
+        if self.debug:
+            LOG.debug("submit %r", run_prompt)
+        focused = (
+            get_focused_app_name_fresh()
+            if self.settings.pre_inject_refocus
+            else ""
+        )
+        self.service.submit(
+            ExpansionJob(
+                capture=run_prompt,
+                delete_count=dc,
+                prior_words=self._prior_context_string(),
+                undo_restore=undo,
+                focused_app_at_submit=focused,
+            )
+        )
+
     def _enter_capture_from_double_space(self) -> None:
         if self._delete_n is None:
             return
@@ -183,6 +264,11 @@ class KeyboardListener:
         self._capture.clear()
         self._trigger.reset()
         self._capture_from_prefix = False
+        self._close_matcher = (
+            CloseDelimiterMatcher(self.settings.capture_close)
+            if self.settings.capture_close.strip()
+            else None
+        )
         self._live_clear()
         self._dbl_armed = False
         if self.debug:
@@ -258,39 +344,63 @@ class KeyboardListener:
 
         if self._state == _STATE_CAPTURING:
             if key in (Key.enter, getattr(Key, "kp_enter", Key.enter)):
-                run_prompt = self._capture.text()
-                if self.debug:
-                    LOG.debug("submit %r", run_prompt)
-                from_prefix = self._capture_from_prefix
-                self._state = _STATE_IDLE
-                self._capture.clear()
-                self._trigger.reset()
-                self._capture_from_prefix = False
-                if not run_prompt.strip():
-                    LOG.warning("empty intent — type text after trigger then Enter")
-                    return
-                if from_prefix and self.settings.use_prefix_trigger and self.trigger:
-                    dc = len(self.trigger) + len(run_prompt) + max(0, self.enter_backspaces)
-                    undo = f"{self.trigger}{run_prompt}"
-                else:
-                    dc = len(run_prompt) + max(0, self.enter_backspaces)
-                    undo = run_prompt
-                self.service.submit(
-                    ExpansionJob(
-                        capture=run_prompt,
-                        delete_count=dc,
-                        prior_words=self._prior_context_string(),
-                        undo_restore=undo,
-                    )
-                )
+                self._submit_capture(entered_with_newline=True)
                 return
 
             if ch == "\b":
+                if self._close_matcher is not None and self._close_matcher.backspace():
+                    return
                 self._capture.backspace()
-            elif ch is not None and ch != "\n":
+                return
+
+            if self._close_matcher is not None and ch is not None and ch != "\n":
+                for ev in self._close_matcher.feed(ch):
+                    if ev[0] == "submit":
+                        self._submit_capture(entered_with_newline=False)
+                        return
+                    append_ch = ev[1]
+                    if append_ch is not None:
+                        self._capture.push(append_ch)
+                if self.debug and len(self._capture.chars) <= 80:
+                    LOG.debug("capture %r", self._capture.text())
+                return
+
+            if ch is not None and ch != "\n":
                 self._capture.push(ch)
                 if self.debug and len(self._capture.chars) <= 80:
                     LOG.debug("capture %r", self._capture.text())
+            return
+
+        # If a capture expansion is in flight, buffer subsequent keystrokes so the eventual
+        # inject can replace capture+tail atomically. Still allow starting a new capture
+        # with the trigger: while a trigger prefix is in progress, do not add chars to tail.
+        if self._state == _STATE_IDLE and self.service.has_pending_expansion_tail():
+            if self.settings.use_prefix_trigger and self.trigger:
+                completed = self._trigger.try_advance(ch, self.trigger)
+                if completed:
+                    if self.debug:
+                        LOG.debug("capture mode on (prefix)")
+                    self._state = _STATE_CAPTURING
+                    self._capture_from_prefix = True
+                    self._capture.clear()
+                    self._close_matcher = (
+                        CloseDelimiterMatcher(self.settings.capture_close)
+                        if self.settings.capture_close.strip()
+                        else None
+                    )
+                    self._live_clear()
+                    return
+                if self._trigger.in_progress:
+                    # Don't buffer into tail while we're determining whether a new trigger begins.
+                    self._live_clear()
+                    return
+
+            if ch is not None:
+                self.service.append_expansion_tail_char(ch)
+            if self._live_resolver is not None:
+                self._handle_live_key_context_only(key, ch)
+            else:
+                self._context_idle_key(ch)
             return
 
         if ch != " " and self._state == _STATE_IDLE:
@@ -319,6 +429,11 @@ class KeyboardListener:
                 self._state = _STATE_CAPTURING
                 self._capture_from_prefix = True
                 self._capture.clear()
+                self._close_matcher = (
+                    CloseDelimiterMatcher(self.settings.capture_close)
+                    if self.settings.capture_close.strip()
+                    else None
+                )
                 self._live_clear()
                 return
             if self._trigger.in_progress:
@@ -368,9 +483,21 @@ class KeyboardListener:
             finally:
                 parent._inject_depth -= 1
 
+        def cursor_left_n(n: int) -> None:
+            parent._inject_depth += 1
+            try:
+                for _ in range(max(0, n)):
+                    ctrl.tap(Key.left)
+                    if delay_bs:
+                        time.sleep(delay_bs)
+            finally:
+                parent._inject_depth -= 1
+
         parent._delete_n = delete_n
         parent._paste_text = paste_text
-        self.service.set_inject(delete_n, paste_text, type_expansion)
+        self.service.set_inject(
+            delete_n, paste_text, type_expansion, cursor_left_fn=cursor_left_n
+        )
 
     def _run_pynput_blocking(self, stop: threading.Event) -> None:
         self._ctrl = Controller()

@@ -101,3 +101,72 @@ def get_focused_app_name(ttl_sec: float = _FOCUS_TTL_SEC) -> str:
         _focus_cache_at = time.monotonic()
         _focus_cache_val = label or "unknown"
     return _focus_cache_val
+
+
+def get_focused_app_name_fresh(*, cmd_timeout: float = 1.25) -> str:
+    """Uncached frontmost app — use when injecting so we know where capture was typed."""
+    try:
+        s = platform.system()
+        if s == "Darwin":
+            script = (
+                'tell application "System Events" to get name of first application process '
+                "whose frontmost is true"
+            )
+            out = _run_cmd(["/usr/bin/osascript", "-e", script], timeout=cmd_timeout)
+            return (out or "unknown").strip() or "unknown"
+        return get_focused_app_name(ttl_sec=0)
+    except Exception as e:
+        LOG.debug("fresh focus detection: %s", e)
+        return "unknown"
+
+
+def activate_application(name: str, *, cmd_timeout: float = 2.5) -> bool:
+    """Raise target app (macOS). Best-effort for Windows/Linux."""
+    app = (name or "").strip()
+    if not app or app == "unknown":
+        return False
+    s = platform.system()
+    if s == "Darwin":
+        safe = app.replace("\\", "\\\\").replace('"', '\\"')
+        script = f'tell application "{safe}" to activate'
+        try:
+            r = subprocess.run(
+                ["/usr/bin/osascript", "-e", script],
+                capture_output=True,
+                text=True,
+                timeout=cmd_timeout,
+                check=False,
+            )
+            if r.returncode != 0 and (r.stderr or "").strip():
+                LOG.debug("activate %r: %s", app, (r.stderr or "").strip()[:200])
+            return r.returncode == 0
+        except (OSError, subprocess.SubprocessError) as e:
+            LOG.debug("activate %r failed: %s", app, e)
+            return False
+    if s == "Windows":
+        try:
+            import ctypes
+
+            u = ctypes.windll.user32  # type: ignore[attr-defined]
+            hwnd = u.FindWindowW(None, app[:512])  # fragile by title
+            if hwnd:
+                u.ShowWindow(hwnd, 9)
+                u.SetForegroundWindow(hwnd)
+                return True
+        except Exception as e:
+            LOG.debug("Windows activate: %s", e)
+        return False
+    return False
+
+
+def refocus_if_needed_for_inject(*, captured_app: str, cmd_timeout: float = 1.25) -> None:
+    """If the user switched away while the worker ran, bring the capture app forward before inject."""
+    cap = (captured_app or "").strip()
+    if not cap or cap == "unknown":
+        return
+    now = get_focused_app_name_fresh(cmd_timeout=cmd_timeout)
+    if now == cap:
+        return
+    LOG.info("inject refocus → %r (frontmost was %r)", cap, now)
+    activate_application(cap, cmd_timeout=2.5)
+    time.sleep(0.12)

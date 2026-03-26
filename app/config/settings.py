@@ -36,7 +36,8 @@ def _config_dir() -> Path:
 
 @dataclass
 class Settings:
-    trigger: str = field(default_factory=lambda: _env("TRIGGER", "///"))
+    trigger: str = field(default_factory=lambda: _env("TRIGGER", "//"))
+    capture_close: str = field(default_factory=lambda: _env("CAPTURE_CLOSE", "//").strip())
     use_prefix_trigger: bool = field(default_factory=lambda: _env_bool("ACTIVATION_PREFIX", True))
     double_space_activation: bool = field(default_factory=lambda: _env_bool("ACTIVATION_DOUBLE_SPACE", False))
     double_space_window_ms: int = field(
@@ -115,6 +116,16 @@ class Settings:
     phrase_buffer_max: int = field(default_factory=lambda: max(0, min(20, int(_env("PHRASE_BUFFER_MAX", "0")))))
     perf: bool = field(default_factory=lambda: _env_bool("PERF", False))
     inject_prefer_type: bool = field(default_factory=lambda: _env_bool("INJECT_TYPE_FIRST", True))
+    pre_inject_refocus: bool = field(default_factory=lambda: _env_bool("PRE_INJECT_REFOCUS", True))
+    # After parallel tail typing stops (ms), before inject; 0 = off. Reduces Notes/Terminal races with synthetic keys.
+    inject_settle_ms: int = field(
+        default_factory=lambda: max(0, min(2000, int(_env("INJECT_SETTLE_MS", "55"))))
+    )
+    inject_settle_max_wait_ms: int = field(
+        default_factory=lambda: max(50, min(30_000, int(_env("INJECT_SETTLE_MAX_WAIT_MS", "3000"))))
+    )
+    # Move cursor left across parallel tail, delete only //capture//, type replacement (tail never deleted).
+    inject_tail_via_cursor_left: bool = field(default_factory=lambda: _env_bool("INJECT_TAIL_CURSOR_LEFT", True))
     metrics_enabled: bool = field(default_factory=lambda: _env_bool("METRICS", False))
 
     backend: str = field(default_factory=lambda: _env("BACKEND", "pynput"))

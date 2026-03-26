@@ -7,7 +7,7 @@ import re
 import threading
 import time
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
 
 import httpx
@@ -17,7 +17,7 @@ from app.ai.factory import build_chat_provider
 from app.autocorrect.engine import AutocorrectEngine
 from app.cache.store import SqliteExpansionCache
 from app.config.settings import Settings
-from app.context.focus import get_focused_app_name
+from app.context.focus import get_focused_app_name, refocus_if_needed_for_inject
 from app.engine.l0_compute import FxRateCache
 from app.engine.live_word import live_cache_prompt
 from app.engine.pipeline import ExpansionPipeline
@@ -37,6 +37,8 @@ class ExpansionJob:
     prior_words: str = ""
     # Re-type after removing injection (e.g. trigger + intent); empty → delete injected text only (palette).
     undo_restore: str = ""
+    # macOS process name from System Events when capture was submitted (inject refocus).
+    focused_app_at_submit: str = ""
 
 
 @dataclass
@@ -51,6 +53,16 @@ class LiveEnrichJob:
     cache_prompt: str
     user_text: str
     system: str
+
+
+@dataclass
+class _PendingExpansionTail:
+    """Keys typed after capture submit, applied together when the expansion is injected."""
+
+    job: ExpansionJob
+    tail: list[str] = field(default_factory=list)
+    lock: threading.Lock = field(default_factory=threading.Lock)
+    last_activity_mono: float = 0.0
 
 
 class ExpansionService:
@@ -101,8 +113,50 @@ class ExpansionService:
         self._delete_fn: Optional[Callable[[int], None]] = None
         self._paste_fn: Optional[Callable[[str], None]] = None
         self._type_fn: Optional[Callable[[str], None]] = None
+        self._cursor_left_fn: Optional[Callable[[int], None]] = None
         self._undo: Optional[UndoFrame] = None
         self._undo_lock = threading.Lock()
+        self._pending_tails: deque[_PendingExpansionTail] = deque()
+        self._pending_tail_lock = threading.Lock()
+
+    def has_pending_expansion_tail(self) -> bool:
+        with self._pending_tail_lock:
+            return len(self._pending_tails) > 0
+
+    def append_expansion_tail_char(self, ch: str) -> None:
+        """Record a keystroke typed while an expansion is in flight (must match apply order)."""
+        with self._pending_tail_lock:
+            if not self._pending_tails:
+                return
+            pe = self._pending_tails[0]
+        with pe.lock:
+            if ch == "\b":
+                if pe.tail:
+                    pe.tail.pop()
+            else:
+                pe.tail.append(ch)
+            pe.last_activity_mono = time.monotonic()
+
+    def _pop_tail_for_job(self, job: ExpansionJob) -> str:
+        """Remove head pending tail if it matches job; return concatenated tail text."""
+        with self._pending_tail_lock:
+            if not self._pending_tails or self._pending_tails[0].job is not job:
+                LOG.warning(
+                    "expansion tail mismatch (queue desync) — applying without tail buffer fix-up"
+                )
+                return ""
+            pe = self._pending_tails.popleft()
+        with pe.lock:
+            return "".join(pe.tail)
+
+    def _discard_pending_tail(self, job: ExpansionJob) -> None:
+        with self._pending_tail_lock:
+            if not self._pending_tails:
+                return
+            if self._pending_tails[0].job is not job:
+                LOG.debug("discard tail: job not at queue head")
+                return
+            self._pending_tails.popleft()
 
     def _on_cache_touch(self, cache_prompt: str, response: str, hit_count: int, source: str) -> None:
         from app.snippets.promote import maybe_promote_cache_hit
@@ -161,10 +215,12 @@ class ExpansionService:
         delete_fn: Callable[[int], None],
         paste_fn: Callable[[str], None],
         type_fn: Optional[Callable[[str], None]] = None,
+        cursor_left_fn: Optional[Callable[[int], None]] = None,
     ) -> None:
         self._delete_fn = delete_fn
         self._paste_fn = paste_fn
         self._type_fn = type_fn
+        self._cursor_left_fn = cursor_left_fn
 
     @property
     def inject_lock(self) -> threading.Lock:
@@ -356,6 +412,8 @@ class ExpansionService:
         if self._loop is None or self._queue is None:
             LOG.error("worker not ready")
             return
+        with self._pending_tail_lock:
+            self._pending_tails.append(_PendingExpansionTail(job=job))
         asyncio.run_coroutine_threadsafe(self._queue.put(job), self._loop)
 
     def stop(self) -> None:
@@ -378,6 +436,7 @@ class ExpansionService:
                     prior_words=job.prior_words,
                 )
                 if not outcome.text:
+                    self._discard_pending_tail(job)
                     LOG.warning("empty expansion result (%s)", outcome.layer)
                     self.tray_set_error(f"empty result ({outcome.layer})")
                     continue
@@ -389,27 +448,86 @@ class ExpansionService:
 
                     ok = await asyncio.to_thread(confirm_expansion, outcome.text)
                     if not ok:
+                        self._discard_pending_tail(job)
                         self.tray_set_idle("preview cancelled")
                         continue
                 await asyncio.to_thread(self._apply_replacement, job, outcome.text, outcome.layer)
             except Exception as e:
+                self._discard_pending_tail(job)
                 self.tray_set_error(str(e))
                 LOG.exception("expansion failed: %s", e)
+
+    def _wait_tail_quiet(self, job: ExpansionJob) -> None:
+        """Brief pause so «parallel tail» is stable before inject (reduces interleaved real vs synthetic keys)."""
+        settle = self.settings.inject_settle_ms / 1000.0
+        if settle <= 0:
+            return
+        max_wait = max(0.05, self.settings.inject_settle_max_wait_ms / 1000.0)
+        deadline = time.monotonic() + max_wait
+        while time.monotonic() < deadline:
+            with self._pending_tail_lock:
+                if not self._pending_tails or self._pending_tails[0].job is not job:
+                    return
+                pe = self._pending_tails[0]
+            with pe.lock:
+                if not pe.tail:
+                    return
+                idle_for = time.monotonic() - pe.last_activity_mono
+            if idle_for >= settle:
+                return
+            time.sleep(min(0.02, max(0.004, settle / 5)))
+        LOG.debug("inject tail settle: max wait exceeded, injecting anyway")
 
     def _apply_replacement(self, job: ExpansionJob, text: str, layer: str) -> None:
         if self._delete_fn is None or self._paste_fn is None:
             LOG.error("inject not configured")
+            self._discard_pending_tail(job)
             return
-        delete_count = job.delete_count
+        self._wait_tail_quiet(job)
         injected_ok = False
+        to_inject = ""
+        undo_restore = ""
         with self._inject_lock:
             try:
-                LOG.info("inject layer=%s delete=%s", layer, delete_count)
+                if self.settings.pre_inject_refocus:
+                    refocus_if_needed_for_inject(captured_app=job.focused_app_at_submit)
+                tail = self._pop_tail_for_job(job)
+                n_tail = len(tail)
+                undo_restore = f"{job.undo_restore}{tail}"
+                use_left = (
+                    n_tail > 0
+                    and self.settings.inject_tail_via_cursor_left
+                    and self._cursor_left_fn is not None
+                )
+                if use_left:
+                    to_inject = text
+                    delete_count = job.delete_count
+                    LOG.info(
+                        "inject layer=%s cursor_left=%s delete=%s (parallel tail preserved, not retyped)",
+                        layer,
+                        n_tail,
+                        delete_count,
+                    )
+                    self._cursor_left_fn(n_tail)
+                    time.sleep(self.settings.after_delete_ms / 1000.0)
+                else:
+                    if n_tail > 0 and self.settings.inject_tail_via_cursor_left and self._cursor_left_fn is None:
+                        LOG.warning(
+                            "inject: parallel tail but no cursor_left_fn — deleting through tail (legacy)"
+                        )
+                    delete_count = job.delete_count + n_tail
+                    to_inject = f"{text}{tail}"
+                    LOG.info(
+                        "inject layer=%s delete=%s%s",
+                        layer,
+                        delete_count,
+                        f" (capture {job.delete_count} + tail {n_tail})" if tail else "",
+                    )
                 self._delete_fn(delete_count)
                 time.sleep(self.settings.after_delete_ms / 1000.0)
                 if self._type_fn is not None and self.settings.inject_prefer_type:
                     try:
-                        self._type_fn(text)
+                        self._type_fn(to_inject)
                         injected_ok = True
                     except Exception as e:
                         LOG.warning("type inject failed, using clipboard: %s", e)
@@ -417,9 +535,9 @@ class ExpansionService:
                     if self.settings.clipboard_restore:
                         prev = cb.get_clipboard()
                         try:
-                            cb.set_clipboard(text)
+                            cb.set_clipboard(to_inject)
                             time.sleep(self.settings.paste_delay_ms / 1000.0)
-                            self._paste_fn(text)
+                            self._paste_fn(to_inject)
                         finally:
 
                             def _restore() -> None:
@@ -431,15 +549,15 @@ class ExpansionService:
 
                             threading.Thread(target=_restore, daemon=True).start()
                     else:
-                        cb.set_clipboard(text)
+                        cb.set_clipboard(to_inject)
                         time.sleep(self.settings.paste_delay_ms / 1000.0)
-                        self._paste_fn(text)
+                        self._paste_fn(to_inject)
                     injected_ok = True
             finally:
                 if injected_ok and self.metrics is not None:
                     self.metrics.incr("capture_injections")
         if injected_ok:
-            self.set_undo_frame(text, job.undo_restore)
+            self.set_undo_frame(to_inject, undo_restore)
 
     def preload_cache_metadata(self) -> None:
         """Log cache stats + optional warmup file listing (no automatic LLM fan-out)."""
