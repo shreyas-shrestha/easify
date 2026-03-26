@@ -11,7 +11,12 @@ if TYPE_CHECKING:
     from app.engine.service import ExpansionService
 
 
-def open_expansion_palette(service: "ExpansionService", settings: "Settings") -> None:
+def open_expansion_palette(
+    service: "ExpansionService",
+    settings: "Settings",
+    *,
+    prior_words: str = "",
+) -> None:
     import tkinter as tk
 
     _ = settings  # reserved for future (preview, model label)
@@ -33,7 +38,7 @@ def open_expansion_palette(service: "ExpansionService", settings: "Settings") ->
         root.quit()
         root.destroy()
         if text:
-            service.submit(ExpansionJob(capture=text, delete_count=0))
+            service.submit(ExpansionJob(capture=text, delete_count=0, prior_words=prior_words))
 
     def cancel() -> None:
         win.destroy()

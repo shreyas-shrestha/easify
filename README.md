@@ -42,6 +42,18 @@ At least one must be enabled (defaults: **prefix on**, double-space off, palette
 
 **L0 examples:** `5 inches to cm`, `100 USD to EUR`, `2 + 2*3`, `today + 14 days`.
 
+## Phase 2 (context, cloud LLM, preview, backends)
+
+| Feature | Env / notes |
+|---------|-------------|
+| **Focused app → L3** | `EASIFY_CONTEXT_FOCUSED_APP=1` (default): macOS AppleScript, Windows title, Linux `xdotool` / `xprop` |
+| **Rolling words** | `EASIFY_CONTEXT_BUFFER_WORDS=N` (default `0` = off): last *N* space-delimited tokens fed into the L3 system prompt |
+| **AI provider** | `EASIFY_AI_PROVIDER=ollama` (default) \| `openai` \| `anthropic`; keys `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`; models `EASIFY_OPENAI_MODEL`, `EASIFY_ANTHROPIC_MODEL` |
+| **Expansion preview** | `EASIFY_EXPANSION_PREVIEW=1`: tkinter accept/cancel before inject |
+| **Keyboard backend** | `EASIFY_BACKEND=pynput` (default) \| `keyboard` (optional `pip install easify[keyboard]`) \| `evdev` + `EASIFY_EVDEV_DEVICE=/dev/input/eventN` (`pip install easify[evdev]`, often requires permissions) |
+
+Cache keys for **contextual** L3 rows include the augmented system string (app + prior words). Snippet / fuzzy / context-free cache behavior is unchanged.
+
 ## Repository layout
 
 ```text
@@ -113,6 +125,17 @@ See `data/config.example.toml` in the repo.
 | `EASIFY_OLLAMA_TIMEOUT` | Total HTTP timeout seconds (default `120`) |
 | `OLLAMA_URL` | Ollama generate URL |
 | `OLLAMA_MODEL`, `EASIFY_MODEL` | Model name (`EASIFY_MODEL` wins if both set) |
+| `EASIFY_AI_PROVIDER` | `ollama` (default) \| `openai` \| `gpt` \| `anthropic` \| `claude` |
+| `OPENAI_API_KEY`, `EASIFY_OPENAI_API_KEY` | For OpenAI-compatible chat completions |
+| `OPENAI_BASE_URL`, `EASIFY_OPENAI_BASE_URL` | Default `https://api.openai.com/v1` |
+| `EASIFY_OPENAI_MODEL` | Default `gpt-4o-mini` |
+| `ANTHROPIC_API_KEY`, `EASIFY_ANTHROPIC_API_KEY` | Claude Messages API |
+| `EASIFY_ANTHROPIC_MODEL` | Default `claude-3-5-haiku-20241022` |
+| `EASIFY_CONTEXT_FOCUSED_APP` | `1` = detect foreground app for L3 (default) |
+| `EASIFY_CONTEXT_BUFFER_WORDS` | Rolling word count for L3 (`0` = off, default) |
+| `EASIFY_EXPANSION_PREVIEW` | `1` = confirm injection in a small window |
+| `EASIFY_BACKEND` | `pynput` \| `keyboard` \| `evdev` |
+| `EASIFY_EVDEV_DEVICE` | Linux evdev path when `BACKEND=evdev` |
 
 Intent hints: `emoji happy`, `fix teh`, `convert 5 ft to meters` (see `app/ai/prompts.py`).
 

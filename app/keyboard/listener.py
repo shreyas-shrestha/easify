@@ -51,6 +51,11 @@ class KeyboardListener:
         self._dbl_armed = False
         self._dbl_last_mono = 0.0
 
+        self._rolling_words: Optional[deque[str]] = (
+            deque(maxlen=settings.context_buffer_words) if settings.context_buffer_words > 0 else None
+        )
+        self._ctx_chars: list[str] = []
+
         self._live_resolver: Optional[LiveWordResolver] = None
         self._live_chars: list[str] = []
         self._phrase_deque: Optional[deque[str]] = (
@@ -62,7 +67,7 @@ class KeyboardListener:
                 snippets=service.snippets,
                 autocorrect=service.autocorrect,
                 cache=service.cache,
-                model=settings.ollama_model,
+                model=service.cache_model_id,
                 min_word_len=settings.live_min_word_len,
                 fuzzy_enabled=settings.live_fuzzy,
                 cache_enabled=settings.live_cache,
@@ -74,6 +79,35 @@ class KeyboardListener:
         self._live_chars.clear()
         if self._phrase_deque is not None:
             self._phrase_deque.clear()
+
+    def _push_rolling_word(self, word: str) -> None:
+        w = word.strip()
+        if not w or self._rolling_words is None:
+            return
+        self._rolling_words.append(w)
+
+    def _context_idle_key(self, ch: Optional[str]) -> None:
+        if self._rolling_words is None:
+            return
+        if ch == "\b":
+            if self._ctx_chars:
+                self._ctx_chars.pop()
+            return
+        if ch is not None and len(ch) == 1 and ch.isalpha():
+            self._ctx_chars.append(ch)
+            return
+        if ch in (" ", "\n"):
+            w = "".join(self._ctx_chars).strip()
+            self._ctx_chars.clear()
+            if w:
+                self._rolling_words.append(w)
+            return
+        self._ctx_chars.clear()
+
+    def _prior_context_string(self) -> str:
+        if not self._rolling_words:
+            return ""
+        return " ".join(self._rolling_words)
 
     def _handle_live_key(self, key: object, ch: Optional[str]) -> None:
         if self._live_resolver is None:
@@ -100,6 +134,7 @@ class KeyboardListener:
             if self._phrase_deque is not None:
                 self._phrase_deque.clear()
             return
+        self._push_rolling_word(word)
         if not self._live_cooldown.can_fix():
             return
         if self._phrase_deque is not None:
@@ -229,7 +264,13 @@ class KeyboardListener:
                     dc = len(self.trigger) + len(run_prompt) + max(0, self.enter_backspaces)
                 else:
                     dc = len(run_prompt) + max(0, self.enter_backspaces)
-                self.service.submit(ExpansionJob(capture=run_prompt, delete_count=dc))
+                self.service.submit(
+                    ExpansionJob(
+                        capture=run_prompt,
+                        delete_count=dc,
+                        prior_words=self._prior_context_string(),
+                    )
+                )
                 return
 
             if ch == "\b":
@@ -274,6 +315,8 @@ class KeyboardListener:
 
         if self._live_resolver is not None:
             self._handle_live_key(key, ch)
+        else:
+            self._context_idle_key(ch)
 
     def _setup_inject(self, ctrl: Controller) -> None:
         import platform
@@ -317,7 +360,7 @@ class KeyboardListener:
         parent._paste_text = paste_text
         self.service.set_inject(delete_n, paste_text, type_expansion)
 
-    def run_blocking(self, stop: threading.Event) -> None:
+    def _run_pynput_blocking(self, stop: threading.Event) -> None:
         self._ctrl = Controller()
         self._setup_inject(self._ctrl)
         self._listener = Listener(on_press=self._on_press)
@@ -333,3 +376,8 @@ class KeyboardListener:
             pass
         if self._listener is not None:
             self._listener.stop()
+
+    def run_blocking(self, stop: threading.Event) -> None:
+        from app.keyboard.runner import run_keyboard_backend
+
+        run_keyboard_backend(self, stop)

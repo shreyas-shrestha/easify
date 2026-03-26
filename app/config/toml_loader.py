@@ -106,6 +106,23 @@ def apply_toml_to_settings(obj: Any, data: Mapping[str, Any]) -> None:
     take_bool("tray_enabled", "EASIFY_TRAY", key="tray")
     take_str("ollama_url", "OLLAMA_URL", key="ollama_url")
     take_str("ollama_model", "EASIFY_MODEL", "OLLAMA_MODEL", key="model")
+    take_str("ai_provider", "EASIFY_AI_PROVIDER", key="ai_provider")
+    take_str("openai_api_key", "EASIFY_OPENAI_API_KEY", "OPENAI_API_KEY", key="openai_api_key")
+    take_str("openai_base_url", "EASIFY_OPENAI_BASE_URL", "OPENAI_BASE_URL", key="openai_base_url")
+    take_str("openai_model", "EASIFY_OPENAI_MODEL", key="openai_model")
+    take_str("anthropic_api_key", "EASIFY_ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY", key="anthropic_api_key")
+    take_str("anthropic_model", "EASIFY_ANTHROPIC_MODEL", key="anthropic_model")
+    take_bool("context_include_focused_app", "EASIFY_CONTEXT_FOCUSED_APP", key="context_include_focused_app")
+    take_int(
+        "context_buffer_words",
+        "EASIFY_CONTEXT_BUFFER_WORDS",
+        key="context_buffer_words",
+        lo=0,
+        hi=96,
+    )
+    take_bool("expansion_preview", "EASIFY_EXPANSION_PREVIEW", key="expansion_preview")
+    take_str("evdev_device", "EASIFY_EVDEV_DEVICE", key="evdev_device")
+    take_str("backend", "EASIFY_BACKEND", key="backend")
 
     take_int("fuzzy_score_cutoff", "EASIFY_FUZZY_SCORE", "OLLAMA_EXPANDER_FUZZY_SCORE", key="fuzzy_score", lo=50, hi=100)
     take_int("fuzzy_max_keys", "EASIFY_FUZZY_MAX_KEYS", "OLLAMA_EXPANDER_FUZZY_MAX_KEYS", key="fuzzy_max_keys", lo=100, hi=500_000)

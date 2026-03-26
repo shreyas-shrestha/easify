@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 LIVE_WORD_ENRICH = (
     "The user typed a single word in running prose. If it is misspelled or a clear typo, "
     "output ONLY the corrected word. If it is already correct, output the exact same word. "
@@ -46,6 +48,29 @@ EXPAND = (
     "The user wants prose expansion (e.g. meeting notes, email boilerplate). "
     "Output ONLY the expanded text body—no preamble or quotes."
 )
+
+
+def attach_context(
+    base_system: str,
+    *,
+    focused_app: str = "",
+    prior_words: str = "",
+) -> str:
+    """Append environment context for L3 (does not affect intent classify() routing)."""
+    parts = [base_system.rstrip()]
+    app = (focused_app or "").strip()
+    prior = re.sub(r"\s+", " ", (prior_words or "").strip())
+    if app and app != "unknown":
+        parts.append(
+            'Context: the user\'s focused application is "'
+            + app[:200]
+            + '". Adjust tone and formatting when relevant.'
+        )
+    if prior:
+        parts.append(
+            "Context: words typed immediately before this request (may be incomplete): " + prior[:500]
+        )
+    return "\n\n".join(parts).strip()
 
 
 def classify(capture: str) -> tuple[str, str]:

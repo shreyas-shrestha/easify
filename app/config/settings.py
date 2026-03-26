@@ -54,6 +54,29 @@ class Settings:
         default_factory=lambda: os.environ.get("EASIFY_MODEL") or os.environ.get("OLLAMA_MODEL", "phi3")
     )
 
+    ai_provider: str = field(default_factory=lambda: _env("AI_PROVIDER", "ollama").lower().strip())
+    openai_api_key: str = field(
+        default_factory=lambda: os.environ.get("EASIFY_OPENAI_API_KEY")
+        or os.environ.get("OPENAI_API_KEY", "")
+    )
+    openai_base_url: str = field(
+        default_factory=lambda: os.environ.get("EASIFY_OPENAI_BASE_URL")
+        or os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1")
+    )
+    openai_model: str = field(default_factory=lambda: _env("OPENAI_MODEL", "gpt-4o-mini"))
+    anthropic_api_key: str = field(
+        default_factory=lambda: os.environ.get("EASIFY_ANTHROPIC_API_KEY")
+        or os.environ.get("ANTHROPIC_API_KEY", "")
+    )
+    anthropic_model: str = field(default_factory=lambda: _env("ANTHROPIC_MODEL", "claude-3-5-haiku-20241022"))
+
+    context_include_focused_app: bool = field(default_factory=lambda: _env_bool("CONTEXT_FOCUSED_APP", True))
+    context_buffer_words: int = field(
+        default_factory=lambda: max(0, min(96, int(_env("CONTEXT_BUFFER_WORDS", "0"))))
+    )
+    expansion_preview: bool = field(default_factory=lambda: _env_bool("EXPANSION_PREVIEW", False))
+    evdev_device: str = field(default_factory=lambda: _env("EVDEV_DEVICE", "").strip())
+
     snippets_paths: list[Path] = field(default_factory=list)
     autocorrect_path: Optional[Path] = None
     warmup_prompts_path: Optional[Path] = None

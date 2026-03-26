@@ -3,6 +3,7 @@ from pathlib import Path
 
 import httpx
 
+from app.ai.chat_provider import OllamaChatProvider
 from app.ai.ollama import OllamaClient
 from app.autocorrect.engine import AutocorrectEngine
 from app.cache.store import SqliteExpansionCache
@@ -18,12 +19,12 @@ def test_pipeline_snippet_instant(tmp_path: Path) -> None:
     ac = AutocorrectEngine(None)
     cache = SqliteExpansionCache(tmp_path / "db.sqlite")
     fx = FxRateCache(tmp_path / "fx.json")
-    ollama = OllamaClient("http://127.0.0.1:9/nope", "noop", timeout_s=0.1, retries=0)
+    llm = OllamaChatProvider(OllamaClient("http://127.0.0.1:9/nope", "noop", timeout_s=0.1, retries=0))
     pipe = ExpansionPipeline(
         snippets=snippets,
         autocorrect=ac,
         cache=cache,
-        ollama=ollama,
+        llm=llm,
         fx_cache=fx,
     )
 

@@ -63,15 +63,24 @@ def main() -> None:
         service.prewarm_cache()
 
     LOG.info(
-        "Easify L0→L3 | snippets=%s | model=%s | tray=%s | palette=%s",
-        len(settings.snippets_paths),
-        settings.ollama_model,
+        "Easify L0→L3 | provider=%s | cache_model=%s | tray=%s | palette=%s | context_words=%s",
+        settings.ai_provider,
+        service.cache_model_id,
         "on" if settings.tray_enabled else "off",
         "on" if settings.palette_hotkey.strip() else "off",
+        settings.context_buffer_words,
     )
 
     stop = threading.Event()
     hotkey_listener = None
+
+    listener = KeyboardListener(
+        service=service,
+        settings=settings,
+        trigger=settings.trigger,
+        enter_backspaces=settings.enter_backspaces,
+        debug=settings.debug_keys,
+    )
 
     if settings.palette_hotkey.strip():
         try:
@@ -82,10 +91,12 @@ def main() -> None:
             hk_str = settings.palette_hotkey.strip()
 
             def _palette() -> None:
-                threading.Thread(
-                    target=lambda: open_expansion_palette(service, settings),
-                    daemon=True,
-                ).start()
+                pw = listener._prior_context_string()
+
+                def _run() -> None:
+                    open_expansion_palette(service, settings, prior_words=pw)
+
+                threading.Thread(target=_run, daemon=True).start()
 
             hotkey_listener = kb.GlobalHotKeys({hk_str: _palette})
             hotkey_listener.start()
@@ -112,14 +123,6 @@ def main() -> None:
     signal.signal(signal.SIGINT, _stop)
     if hasattr(signal, "SIGTERM"):
         signal.signal(signal.SIGTERM, _stop)
-
-    listener = KeyboardListener(
-        service=service,
-        settings=settings,
-        trigger=settings.trigger,
-        enter_backspaces=settings.enter_backspaces,
-        debug=settings.debug_keys,
-    )
     try:
         listener.run_blocking(stop)
     finally:

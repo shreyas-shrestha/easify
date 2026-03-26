@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "easify"
-version = "0.4.0"
+version = "0.5.0"
 description = "Cross-platform AI text expansion: layered snippets, autocorrect, cache, local Ollama"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -27,6 +27,8 @@ easify = "app.main:main"
 
 [project.optional-dependencies]
 dev = ["pytest>=7.0"]
+keyboard = ["keyboard>=0.13.5"]
+evdev = ["evdev>=1.6.1"]
 
 [tool.setuptools.packages.find]
 include = ["app*", "easify*"]

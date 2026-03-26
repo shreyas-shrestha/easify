@@ -1,20 +1,22 @@
-"""Layered resolution: L0 compute → L1 snippets/autocorrect → L2 fuzzy/cache → L3 Ollama."""
+"""Layered resolution: L0 compute → L1 snippets/autocorrect → L2 fuzzy/cache → L3 LLM."""
 
 from __future__ import annotations
 
 import time
 from dataclasses import dataclass
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 import httpx
 
 from app.ai import prompts
-from app.ai.ollama import OllamaClient
 from app.autocorrect.engine import AutocorrectEngine
 from app.cache.store import SqliteExpansionCache
 from app.engine.l0_compute import FxRateCache, try_l0_async
 from app.snippets.engine import SnippetEngine
 from app.utils.log import get_logger
+
+if TYPE_CHECKING:
+    from app.ai.factory import ChatProvider
 
 LOG = get_logger(__name__)
 
@@ -26,8 +28,8 @@ class ExpansionOutcome:
     ms: float
 
 
-def _cache_prompt(model: str, user_prompt: str, system: str) -> str:
-    return f"{model}\n{system}\n{user_prompt}"
+def _cache_prompt(model: str, normalized_prompt: str, system: str) -> str:
+    return f"{model}\n{system}\n{normalized_prompt}"
 
 
 class ExpansionPipeline:
@@ -37,7 +39,7 @@ class ExpansionPipeline:
         snippets: SnippetEngine,
         autocorrect: AutocorrectEngine,
         cache: SqliteExpansionCache,
-        ollama: OllamaClient,
+        llm: "ChatProvider",
         fx_cache: FxRateCache,
         verbose: bool = False,
         perf: bool = False,
@@ -45,7 +47,7 @@ class ExpansionPipeline:
         self.snippets = snippets
         self.autocorrect = autocorrect
         self.cache = cache
-        self.ollama = ollama
+        self.llm = llm
         self.fx_cache = fx_cache
         self._verbose = verbose
         self._perf = perf
@@ -57,6 +59,7 @@ class ExpansionPipeline:
         """
         Stages: autocorrect phrase → snippet exact → snippet fuzzy → cache.
         Returns (outcome or None, stage timings).
+        Cache key excludes rolling / focus context (stable across sessions).
         """
         stage_ms: dict[str, float] = {}
 
@@ -89,10 +92,10 @@ class ExpansionPipeline:
             return ExpansionOutcome(hit.value, "L2-snippet-fuzzy", ms), stage_ms
 
         user_prompt, system = prompts.classify(corrected)
-        ck = _cache_prompt(self.ollama.model, user_prompt, system)
+        ck = _cache_prompt(self.llm.cache_model_id, user_prompt, system)
 
         t = time.perf_counter()
-        cached = self.cache.get(self.ollama.model, ck)
+        cached = self.cache.get(self.llm.cache_model_id, ck)
         stage_ms["cache"] = (time.perf_counter() - t) * 1000.0
         if cached:
             ms = (time.perf_counter() - t0) * 1000.0
@@ -106,7 +109,14 @@ class ExpansionPipeline:
             self._log_perf(stage_ms)
         return None, stage_ms
 
-    async def expand(self, capture: str, http: httpx.AsyncClient) -> ExpansionOutcome:
+    async def expand(
+        self,
+        capture: str,
+        http: httpx.AsyncClient,
+        *,
+        focused_app: str = "",
+        prior_words: str = "",
+    ) -> ExpansionOutcome:
         t0 = time.perf_counter()
 
         if not capture.strip():
@@ -128,17 +138,32 @@ class ExpansionPipeline:
             return det
 
         corrected = self.autocorrect.apply_to_phrase(capture)
-        user_prompt, system = prompts.classify(corrected)
-        ck = _cache_prompt(self.ollama.model, user_prompt, system)
+        user_prompt, base_system = prompts.classify(corrected)
+        system_full = prompts.attach_context(
+            base_system,
+            focused_app=focused_app,
+            prior_words=prior_words,
+        )
+        ck = _cache_prompt(self.llm.cache_model_id, user_prompt, system_full)
 
-        LOG.info("L3 calling Ollama model=%s", self.ollama.model)
+        t = time.perf_counter()
+        cached = self.cache.get(self.llm.cache_model_id, ck)
+        if cached:
+            ms = (time.perf_counter() - t0) * 1000.0
+            if self._verbose:
+                LOG.info("L2 cache hit (contextual) (%s ms)", round(ms, 2))
+            return ExpansionOutcome(cached, "L2-cache", ms)
+
+        mid = self.llm.cache_model_id
+        LOG.info("L3 %s generate model=%s", self.llm.name, mid)
         t_ai = time.perf_counter()
-        text = await self.ollama.generate(http, user_prompt, system)
+        text = await self.llm.generate(http, user_prompt, system_full)
         if self._perf:
-            LOG.info("L3 ollama generate (ms): %s", round((time.perf_counter() - t_ai) * 1000.0, 3))
+            LOG.info("L3 generate (ms): %s", round((time.perf_counter() - t_ai) * 1000.0, 3))
+        layer = f"L3-{self.llm.name}"
         if text:
-            self.cache.put(self.ollama.model, ck, text, source="ai")
+            self.cache.put(self.llm.cache_model_id, ck, text, source="ai")
         ms = (time.perf_counter() - t0) * 1000.0
         if self._verbose:
-            LOG.info("L3 ai done (%s ms)", round(ms, 2))
-        return ExpansionOutcome(text, "L3-ai", ms)
+            LOG.info("L3 done (%s ms)", round(ms, 2))
+        return ExpansionOutcome(text, layer, ms)

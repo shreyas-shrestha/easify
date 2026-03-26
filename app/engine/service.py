@@ -13,10 +13,11 @@ from typing import Any, Callable, Optional
 import httpx
 
 from app.ai import prompts
-from app.ai.ollama import OllamaClient
+from app.ai.factory import build_chat_provider
 from app.autocorrect.engine import AutocorrectEngine
 from app.cache.store import SqliteExpansionCache
 from app.config.settings import Settings
+from app.context.focus import get_focused_app_name
 from app.engine.l0_compute import FxRateCache
 from app.engine.live_word import live_cache_prompt
 from app.engine.pipeline import ExpansionPipeline
@@ -32,6 +33,7 @@ LOG = get_logger(__name__)
 class ExpansionJob:
     capture: str
     delete_count: int
+    prior_words: str = ""
 
 
 @dataclass(frozen=True)
@@ -53,17 +55,12 @@ class ExpansionService:
         self.autocorrect = AutocorrectEngine(settings.autocorrect_path)
         self.cache = SqliteExpansionCache(settings.cache_db_path, entry_ttl_sec=settings.cache_ttl_sec)
         self.fx_cache = FxRateCache(settings.cache_db_path.parent / "fx_rates.json")
-        self.ollama = OllamaClient(
-            settings.ollama_url,
-            settings.ollama_model,
-            timeout_s=settings.ollama_timeout_s,
-            retries=settings.ollama_retries,
-        )
+        self.llm = build_chat_provider(settings)
         self.pipeline = ExpansionPipeline(
             snippets=self.snippets,
             autocorrect=self.autocorrect,
             cache=self.cache,
-            ollama=self.ollama,
+            llm=self.llm,
             fx_cache=self.fx_cache,
             verbose=settings.verbose,
             perf=settings.perf,
@@ -124,6 +121,10 @@ class ExpansionService:
             if message:
                 self._tray_detail = message[:120]
 
+    @property
+    def cache_model_id(self) -> str:
+        return self.llm.cache_model_id
+
     def _enrich_under_rate_cap(self) -> bool:
         cap = self.settings.live_enrich_max_per_minute
         if cap <= 0:
@@ -147,7 +148,7 @@ class ExpansionService:
         if not self._enrich_under_rate_cap():
             return
         ck = live_cache_prompt(w)
-        model = self.ollama.model
+        model = self.llm.cache_model_id
         if self.cache.get(model, ck):
             return
         dk = f"{model}\x00{ck}"
@@ -182,7 +183,7 @@ class ExpansionService:
         if not self._enrich_under_rate_cap():
             return
         ck = live_cache_prompt(p)
-        model = self.ollama.model
+        model = self.llm.cache_model_id
         if self.cache.get(model, ck):
             return
         dk = f"{model}\x00{ck}"
@@ -219,11 +220,11 @@ class ExpansionService:
             self.metrics.incr("live_enrich_queued")
 
     async def _run_live_enrich_job(self, client: httpx.AsyncClient, job: LiveEnrichJob) -> None:
-        model = self.ollama.model
+        model = self.llm.cache_model_id
         if self.cache.get(model, job.cache_prompt):
             return
         try:
-            text = await self.ollama.generate(client, job.user_text, job.system)
+            text = await self.llm.generate(client, job.user_text, job.system)
         except Exception as e:
             LOG.debug("live enrich ollama: %s", e)
             return
@@ -293,7 +294,15 @@ class ExpansionService:
             job = await self._queue.get()
             try:
                 self.tray_set_thinking(job.capture)
-                outcome = await self.pipeline.expand(job.capture, client)
+                focused = ""
+                if self.settings.context_include_focused_app:
+                    focused = await asyncio.to_thread(get_focused_app_name)
+                outcome = await self.pipeline.expand(
+                    job.capture,
+                    client,
+                    focused_app=focused,
+                    prior_words=job.prior_words,
+                )
                 if not outcome.text:
                     LOG.warning("empty expansion result (%s)", outcome.layer)
                     self.tray_set_error(f"empty result ({outcome.layer})")
@@ -301,6 +310,13 @@ class ExpansionService:
                 prev = outcome.text
                 short = prev if len(prev) <= 100 else prev[:97] + "…"
                 self.tray_set_idle(short)
+                if self.settings.expansion_preview:
+                    from app.ui.preview import confirm_expansion
+
+                    ok = await asyncio.to_thread(confirm_expansion, outcome.text)
+                    if not ok:
+                        self.tray_set_idle("preview cancelled")
+                        continue
                 await asyncio.to_thread(self._apply_replacement, job.delete_count, outcome.text, outcome.layer)
             except Exception as e:
                 self.tray_set_error(str(e))
@@ -373,7 +389,7 @@ class ExpansionService:
             return
         if not isinstance(raw, list):
             return
-        m = self.settings.ollama_model
+        m = self.llm.cache_model_id
         n = 0
         for item in raw:
             if not isinstance(item, str):
