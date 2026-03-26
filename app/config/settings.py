@@ -37,6 +37,16 @@ def _config_dir() -> Path:
 @dataclass
 class Settings:
     trigger: str = field(default_factory=lambda: _env("TRIGGER", "///"))
+    use_prefix_trigger: bool = field(default_factory=lambda: _env_bool("ACTIVATION_PREFIX", True))
+    double_space_activation: bool = field(default_factory=lambda: _env_bool("ACTIVATION_DOUBLE_SPACE", False))
+    double_space_window_ms: int = field(
+        default_factory=lambda: max(100, min(3000, int(_env("DOUBLE_SPACE_WINDOW_MS", "400"))))
+    )
+    palette_hotkey: str = field(default_factory=lambda: _env("PALETTE_HOTKEY", "").strip())
+    capture_max_chars: int = field(
+        default_factory=lambda: max(256, min(100_000, int(_env("CAPTURE_MAX_CHARS", "4000"))))
+    )
+    tray_enabled: bool = field(default_factory=lambda: _env_bool("TRAY", True))
     ollama_url: str = field(
         default_factory=lambda: os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434/api/generate")
     )
@@ -132,6 +142,15 @@ class Settings:
                     pass
                 break
         merge_config_into_settings(self)
+
+    def any_activation_enabled(self) -> bool:
+        if self.use_prefix_trigger:
+            return True
+        if self.double_space_activation:
+            return True
+        if self.palette_hotkey.strip():
+            return True
+        return False
 
     @classmethod
     def load(cls) -> "Settings":

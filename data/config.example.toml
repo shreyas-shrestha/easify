@@ -2,6 +2,13 @@
 # Or set EASIFY_CONFIG=/path/to/this/file
 # Env vars (EASIFY_*) always override these values.
 
+activation_prefix = true
+# activation_double_space = false
+# double_space_window_ms = 400
+# palette_hotkey = "<ctrl>+<shift>+e>"
+# tray = true
+# capture_max_chars = 4000
+
 trigger = "///"
 model = "phi3"
 # ollama_url = "http://127.0.0.1:11434/api/generate"

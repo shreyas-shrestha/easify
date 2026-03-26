@@ -3,28 +3,44 @@ Supercharge writing with llm-based text expansion anywhere you want to write, an
 
 Supercharge writing with LLM-based text expansion anywhere you type: clarification, spell-fix shortcuts, unit conversion, emoji, and semantic expansion — with **local Ollama**, **instant snippets**, **autocorrect**, and a **SQLite semantic cache**.
 
-Type a trigger (default `///`), your intent, **Enter** → deterministic layers run first; if needed, **async** Ollama runs in the background → result is pasted when ready. Keyboard hooks stay **non-blocking** (you keep typing while Layer 3 runs).
+Type a **trigger** (default `///`), **double-space** (optional), or a **palette hotkey** → enter capture → your intent, **Enter** → layers run (**L0 math/units/FX** first); if needed, **async** Ollama on a worker thread → result is pasted when ready. A **tray icon** shows idle / expanding / error so silent failures are rare.
 
 ## Architecture (multi-layer latency)
 
 | Layer | Speed | Components |
 |-------|--------|------------|
+| **L0** | &lt;1 ms (local) / ~50–200 ms (FX fetch) | `l0_compute`: **pint** unit conversion, safe **AST** arithmetic, simple **date** phrases, **Frankfurter** currency (cached daily to `~/.config/easify/fx_rates.json`) |
 | **L1** | &lt;5 ms | `AutocorrectEngine` (token fixes on capture), `SnippetEngine` **exact** match |
-| **L2** | ~1–10 ms | `SnippetEngine` **fuzzy** (`rapidfuzz`), `SqliteExpansionCache` (**O(1)** by key; tracks `hit_count` for “learning” signals) |
+| **L2** | ~1–10 ms | `SnippetEngine` **fuzzy** (`rapidfuzz`), `SqliteExpansionCache` (**WAL** + persistent connection; **O(1)** by key) |
 | **L3** | async / background | `OllamaClient` (`httpx`); results **cached** on success |
 
-Pipeline: `app/engine/pipeline.py` — deterministic paths never call the network. Only L3 uses `httpx.AsyncClient` on a **dedicated event-loop thread** (`app/engine/service.py`). The **live word** path (`app/engine/live_word.py`) is cache/dictionary/snippet only — **no HTTP**. Injection (backspace + paste) is **serialized** behind `inject_busy` so pynput never recurse-loops.
+Pipeline: `app/engine/pipeline.py` — L0 and the snippet/cache stack avoid Ollama when possible. **Currency** uses `httpx` only on rate cache miss. The **live word** path stays local except optional background enrich. Injection is **serialized** with a `threading.Lock` so concurrent capture + live-replace cannot interleave.
 
 ```mermaid
 flowchart LR
   KB[KeyboardListener] --> Q[asyncio.Queue]
   Q --> P[ExpansionPipeline]
-  P --> L1[L1 autocorrect + exact snippet]
+  P --> L0[L0 units math date FX]
+  L0 -->|miss| L1[L1 autocorrect + exact snippet]
   L1 -->|miss| L2[L2 fuzzy + SQLite cache]
   L2 -->|miss| L3[Ollama generate]
   L3 --> C[cache.put]
   C --> INJ[Inject delete + paste]
 ```
+
+### Activation (Phase 1)
+
+At least one must be enabled (defaults: **prefix on**, double-space off, palette off):
+
+| Mode | Env | Notes |
+|------|-----|--------|
+| Prefix | `EASIFY_ACTIVATION_PREFIX=1` (default) | Requires `EASIFY_TRIGGER` (e.g. `///`) |
+| Double-space | `EASIFY_ACTIVATION_DOUBLE_SPACE=1` | Second **Space** within `EASIFY_DOUBLE_SPACE_WINDOW_MS` (default 400 ms) opens capture; two spaces are deleted |
+| Palette | `EASIFY_PALETTE_HOTKEY='<ctrl>+<shift>+e>'` | pynput `GlobalHotKeys` grammar; opens a small **tkinter** window to type intent (no prefix) |
+
+**Tray:** `EASIFY_TRAY=1` (default) — **pystray** + **Pillow**; Quit stops the listener. Disable with `EASIFY_TRAY=0` on headless servers.
+
+**L0 examples:** `5 inches to cm`, `100 USD to EUR`, `2 + 2*3`, `today + 14 days`.
 
 ## Repository layout
 
@@ -42,6 +58,7 @@ easify/
     plugins/          # reserved registry (future)
     bundled/          # default *.json inside the wheel
     utils/            # logging, clipboard, metrics
+    ui/               # tray (pystray), palette (tkinter)
   data/               # dev-time defaults (repo checkout)
   tests/
   requirements.txt
@@ -77,7 +94,13 @@ See `data/config.example.toml` in the repo.
 
 | Variable | Meaning |
 |----------|---------|
-| `EASIFY_TRIGGER` | Prefix (default `///`) |
+| `EASIFY_ACTIVATION_PREFIX` | `1` = type `EASIFY_TRIGGER` to capture (default) |
+| `EASIFY_ACTIVATION_DOUBLE_SPACE` | `1` = double-space opens capture |
+| `EASIFY_DOUBLE_SPACE_WINDOW_MS` | Max gap between spaces (default `400`) |
+| `EASIFY_PALETTE_HOTKEY` | e.g. `<ctrl>+<shift>+e>` — floating palette |
+| `EASIFY_CAPTURE_MAX_CHARS` | Max captured intent length (default `4000`) |
+| `EASIFY_TRAY` | `1` = system tray icon + status (default) |
+| `EASIFY_TRIGGER` | Prefix (default `///`) when prefix activation is on |
 | `EASIFY_SNIPPETS` | Single snippets JSON path (overrides default path list) |
 | `EASIFY_CACHE_DB` | SQLite cache file (default `~/.config/easify/cache.db`) |
 | `EASIFY_CACHE_TTL_SEC` | If &gt; `0`, drop a cache row when `now - created_at` exceeds this (seconds). `0` = keep forever |

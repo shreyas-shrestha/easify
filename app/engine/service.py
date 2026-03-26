@@ -17,6 +17,7 @@ from app.ai.ollama import OllamaClient
 from app.autocorrect.engine import AutocorrectEngine
 from app.cache.store import SqliteExpansionCache
 from app.config.settings import Settings
+from app.engine.l0_compute import FxRateCache
 from app.engine.live_word import live_cache_prompt
 from app.engine.pipeline import ExpansionPipeline
 from app.snippets.engine import SnippetEngine
@@ -51,6 +52,7 @@ class ExpansionService:
         )
         self.autocorrect = AutocorrectEngine(settings.autocorrect_path)
         self.cache = SqliteExpansionCache(settings.cache_db_path, entry_ttl_sec=settings.cache_ttl_sec)
+        self.fx_cache = FxRateCache(settings.cache_db_path.parent / "fx_rates.json")
         self.ollama = OllamaClient(
             settings.ollama_url,
             settings.ollama_model,
@@ -62,6 +64,7 @@ class ExpansionService:
             autocorrect=self.autocorrect,
             cache=self.cache,
             ollama=self.ollama,
+            fx_cache=self.fx_cache,
             verbose=settings.verbose,
             perf=settings.perf,
         )
@@ -75,7 +78,11 @@ class ExpansionService:
         self._enrich_inflight: set[str] = set()
         self._enrich_rate_window: deque[float] = deque()
         self._ready = threading.Event()
-        self._inject_busy = threading.Event()
+        self._inject_lock = threading.Lock()
+        self._tray_lock = threading.Lock()
+        self._tray_status = "idle"
+        self._tray_detail = ""
+        self._tray_last_error = ""
         self._delete_fn: Optional[Callable[[int], None]] = None
         self._paste_fn: Optional[Callable[[str], None]] = None
         self._type_fn: Optional[Callable[[str], None]] = None
@@ -91,8 +98,31 @@ class ExpansionService:
         self._type_fn = type_fn
 
     @property
-    def inject_busy(self) -> threading.Event:
-        return self._inject_busy
+    def inject_lock(self) -> threading.Lock:
+        return self._inject_lock
+
+    def tray_snapshot(self) -> tuple[str, str, str]:
+        with self._tray_lock:
+            return self._tray_status, self._tray_detail, self._tray_last_error
+
+    def tray_set_thinking(self, preview: str = "") -> None:
+        with self._tray_lock:
+            self._tray_status = "thinking"
+            self._tray_detail = preview[:120]
+            self._tray_last_error = ""
+
+    def tray_set_idle(self, last_expansion: str = "") -> None:
+        with self._tray_lock:
+            self._tray_status = "idle"
+            self._tray_detail = last_expansion[:220]
+            self._tray_last_error = ""
+
+    def tray_set_error(self, message: str) -> None:
+        with self._tray_lock:
+            self._tray_status = "error"
+            self._tray_last_error = message[:500]
+            if message:
+                self._tray_detail = message[:120]
 
     def _enrich_under_rate_cap(self) -> bool:
         cap = self.settings.live_enrich_max_per_minute
@@ -262,56 +292,61 @@ class ExpansionService:
         while True:
             job = await self._queue.get()
             try:
+                self.tray_set_thinking(job.capture)
                 outcome = await self.pipeline.expand(job.capture, client)
                 if not outcome.text:
                     LOG.warning("empty expansion result (%s)", outcome.layer)
+                    self.tray_set_error(f"empty result ({outcome.layer})")
                     continue
+                prev = outcome.text
+                short = prev if len(prev) <= 100 else prev[:97] + "…"
+                self.tray_set_idle(short)
                 await asyncio.to_thread(self._apply_replacement, job.delete_count, outcome.text, outcome.layer)
             except Exception as e:
+                self.tray_set_error(str(e))
                 LOG.exception("expansion failed: %s", e)
 
     def _apply_replacement(self, delete_count: int, text: str, layer: str) -> None:
         if self._delete_fn is None or self._paste_fn is None:
             LOG.error("inject not configured")
             return
-        self._inject_busy.set()
         injected_ok = False
-        try:
-            LOG.info("inject layer=%s delete=%s", layer, delete_count)
-            self._delete_fn(delete_count)
-            time.sleep(self.settings.after_delete_ms / 1000.0)
-            if self._type_fn is not None and self.settings.inject_prefer_type:
-                try:
-                    self._type_fn(text)
-                    injected_ok = True
-                    return
-                except Exception as e:
-                    LOG.warning("type inject failed, using clipboard: %s", e)
-            if self.settings.clipboard_restore:
-                prev = cb.get_clipboard()
-                try:
-                    cb.set_clipboard(text)
-                    time.sleep(self.settings.paste_delay_ms / 1000.0)
-                    self._paste_fn(text)
-                finally:
-
-                    def _restore() -> None:
-                        time.sleep(0.35)
+        with self._inject_lock:
+            try:
+                LOG.info("inject layer=%s delete=%s", layer, delete_count)
+                self._delete_fn(delete_count)
+                time.sleep(self.settings.after_delete_ms / 1000.0)
+                if self._type_fn is not None and self.settings.inject_prefer_type:
+                    try:
+                        self._type_fn(text)
+                        injected_ok = True
+                    except Exception as e:
+                        LOG.warning("type inject failed, using clipboard: %s", e)
+                if not injected_ok:
+                    if self.settings.clipboard_restore:
+                        prev = cb.get_clipboard()
                         try:
-                            cb.set_clipboard(prev)
-                        except Exception:
-                            pass
+                            cb.set_clipboard(text)
+                            time.sleep(self.settings.paste_delay_ms / 1000.0)
+                            self._paste_fn(text)
+                        finally:
 
-                    threading.Thread(target=_restore, daemon=True).start()
-            else:
-                cb.set_clipboard(text)
-                time.sleep(self.settings.paste_delay_ms / 1000.0)
-                self._paste_fn(text)
-            injected_ok = True
-        finally:
-            if injected_ok and self.metrics is not None:
-                self.metrics.incr("capture_injections")
-            self._inject_busy.clear()
+                            def _restore() -> None:
+                                time.sleep(0.35)
+                                try:
+                                    cb.set_clipboard(prev)
+                                except Exception:
+                                    pass
+
+                            threading.Thread(target=_restore, daemon=True).start()
+                    else:
+                        cb.set_clipboard(text)
+                        time.sleep(self.settings.paste_delay_ms / 1000.0)
+                        self._paste_fn(text)
+                    injected_ok = True
+            finally:
+                if injected_ok and self.metrics is not None:
+                    self.metrics.incr("capture_injections")
 
     def preload_cache_metadata(self) -> None:
         """Log cache stats + optional warmup file listing (no automatic LLM fan-out)."""

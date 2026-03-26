@@ -5,6 +5,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Optional
 
+from app.utils.log import get_logger
+
+LOG = get_logger(__name__)
+
 
 @dataclass
 class TriggerState:
@@ -41,9 +45,16 @@ class TriggerState:
 
 @dataclass
 class CaptureBuffer:
+    max_chars: int = 4000
     chars: list[str] = field(default_factory=list)
+    _warned_full: bool = field(default=False, repr=False)
 
     def push(self, ch: str) -> None:
+        if len(self.chars) >= self.max_chars:
+            if not self._warned_full:
+                LOG.warning("capture buffer full (%s chars) — further keys ignored until Enter", self.max_chars)
+                self._warned_full = True
+            return
         self.chars.append(ch)
 
     def backspace(self) -> None:
@@ -55,6 +66,7 @@ class CaptureBuffer:
 
     def clear(self) -> None:
         self.chars.clear()
+        self._warned_full = False
 
 
 @dataclass

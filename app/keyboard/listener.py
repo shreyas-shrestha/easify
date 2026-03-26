@@ -1,4 +1,4 @@
-"""Global pynput listener — `///` capture + optional live word buffer (SPACE boundary)."""
+"""Global pynput listener — prefix / double-space capture + optional live word buffer."""
 
 from __future__ import annotations
 
@@ -40,12 +40,16 @@ class KeyboardListener:
         self.debug = debug
         self._state = _STATE_IDLE
         self._trigger = TriggerState()
-        self._capture = CaptureBuffer()
+        self._capture = CaptureBuffer(max_chars=settings.capture_max_chars)
+        self._capture_from_prefix = False
         self._inject_depth = 0
         self._listener: Optional[Listener] = None
         self._ctrl: Optional[Controller] = None
         self._delete_n: Optional[Callable[[int], None]] = None
         self._paste_text: Optional[Callable[[str], None]] = None
+
+        self._dbl_armed = False
+        self._dbl_last_mono = 0.0
 
         self._live_resolver: Optional[LiveWordResolver] = None
         self._live_chars: list[str] = []
@@ -125,26 +129,40 @@ class KeyboardListener:
             elif is_safe_word(word, min_len=self.settings.live_min_word_len):
                 self.service.schedule_live_cache_enrich_word(word)
 
+    def _enter_capture_from_double_space(self) -> None:
+        if self._delete_n is None:
+            return
+        self._inject_depth += 1
+        try:
+            self._delete_n(2)
+        finally:
+            self._inject_depth -= 1
+        self._state = _STATE_CAPTURING
+        self._capture.clear()
+        self._trigger.reset()
+        self._capture_from_prefix = False
+        self._live_clear()
+        self._dbl_armed = False
+        LOG.info("capture mode (double-space)")
+
     def _perform_live_replace(self, old_word: str, new_text: str) -> None:
         if self._delete_n is None:
             return
-        self.service.inject_busy.set()
-        try:
-            self._delete_n(len(old_word) + 1)
-            time.sleep(self.settings.after_delete_ms / 1000.0)
-            self._inject_depth += 1
+        with self.service.inject_lock:
             try:
-                self._type_text(new_text + " ")
-                if self.service.metrics is not None:
-                    self.service.metrics.incr("live_replacements")
+                self._delete_n(len(old_word) + 1)
+                time.sleep(self.settings.after_delete_ms / 1000.0)
+                self._inject_depth += 1
+                try:
+                    self._type_text(new_text + " ")
+                    if self.service.metrics is not None:
+                        self.service.metrics.incr("live_replacements")
+                except Exception as e:
+                    LOG.warning("live type failed: %s", e)
+                finally:
+                    self._inject_depth -= 1
             except Exception as e:
-                LOG.warning("live type failed: %s", e)
-            finally:
-                self._inject_depth -= 1
-        except Exception as e:
-            LOG.warning("live replace failed: %s", e)
-        finally:
-            self.service.inject_busy.clear()
+                LOG.warning("live replace failed: %s", e)
 
     def _type_text(self, text: str) -> None:
         if self._ctrl is None:
@@ -187,7 +205,7 @@ class KeyboardListener:
     def _on_press(self, key: object) -> None:
         if self._inject_depth > 0:
             return
-        if self.service.inject_busy.is_set():
+        if self.service.inject_lock.locked():
             return
         if pynput_skip_key(key):
             return
@@ -199,13 +217,18 @@ class KeyboardListener:
                 run_prompt = self._capture.text()
                 if self.debug:
                     LOG.debug("submit %r", run_prompt)
+                from_prefix = self._capture_from_prefix
                 self._state = _STATE_IDLE
                 self._capture.clear()
                 self._trigger.reset()
+                self._capture_from_prefix = False
                 if not run_prompt.strip():
-                    LOG.warning("empty intent — type text after %r then Enter", self.trigger)
+                    LOG.warning("empty intent — type text after trigger then Enter")
                     return
-                dc = len(self.trigger) + len(run_prompt) + max(0, self.enter_backspaces)
+                if from_prefix and self.settings.use_prefix_trigger and self.trigger:
+                    dc = len(self.trigger) + len(run_prompt) + max(0, self.enter_backspaces)
+                else:
+                    dc = len(run_prompt) + max(0, self.enter_backspaces)
                 self.service.submit(ExpansionJob(capture=run_prompt, delete_count=dc))
                 return
 
@@ -217,17 +240,37 @@ class KeyboardListener:
                     LOG.debug("capture %r", self._capture.text())
             return
 
-        completed = self._trigger.try_advance(ch, self.trigger)
-        if completed:
-            if self.debug:
-                LOG.debug("capture mode on")
-            self._state = _STATE_CAPTURING
-            self._capture.clear()
-            self._live_clear()
-            return
-        if self._trigger.in_progress:
-            self._live_clear()
-            return
+        if ch != " " and self._state == _STATE_IDLE:
+            self._dbl_armed = False
+
+        if (
+            self._state == _STATE_IDLE
+            and ch == " "
+            and self.settings.double_space_activation
+        ):
+            now = time.monotonic()
+            win = self.settings.double_space_window_ms / 1000.0
+            if self._dbl_armed and (now - self._dbl_last_mono) > win:
+                self._dbl_armed = False
+            if self._dbl_armed and (now - self._dbl_last_mono) <= win:
+                self._enter_capture_from_double_space()
+                return
+            self._dbl_armed = True
+            self._dbl_last_mono = now
+
+        if self.settings.use_prefix_trigger and self.trigger:
+            completed = self._trigger.try_advance(ch, self.trigger)
+            if completed:
+                if self.debug:
+                    LOG.debug("capture mode on (prefix)")
+                self._state = _STATE_CAPTURING
+                self._capture_from_prefix = True
+                self._capture.clear()
+                self._live_clear()
+                return
+            if self._trigger.in_progress:
+                self._live_clear()
+                return
 
         if self._live_resolver is not None:
             self._handle_live_key(key, ch)
@@ -280,7 +323,12 @@ class KeyboardListener:
         self._listener = Listener(on_press=self._on_press)
         self._listener.start()
         extra = " + live word buffer" if self._live_resolver else ""
-        LOG.info("listening (pynput) trigger=%r%s", self.trigger, extra)
+        LOG.info(
+            "listening (pynput) prefix=%s double_space=%s%s",
+            self.trigger if self.settings.use_prefix_trigger else "(off)",
+            self.settings.double_space_activation,
+            extra,
+        )
         while not stop.wait(timeout=0.25):
             pass
         if self._listener is not None:

@@ -46,8 +46,14 @@ def main() -> None:
         return
 
     settings = Settings.load()
-    if not settings.trigger:
-        LOG.error("EASIFY_TRIGGER must be non-empty")
+    if not settings.any_activation_enabled():
+        LOG.error(
+            "Enable at least one activation: EASIFY_ACTIVATION_PREFIX=1, "
+            "EASIFY_ACTIVATION_DOUBLE_SPACE=1, or set EASIFY_PALETTE_HOTKEY"
+        )
+        sys.exit(2)
+    if settings.use_prefix_trigger and not settings.trigger.strip():
+        LOG.error("EASIFY_TRIGGER is required when prefix activation is enabled")
         sys.exit(2)
 
     service = ExpansionService(settings)
@@ -57,14 +63,48 @@ def main() -> None:
         service.prewarm_cache()
 
     LOG.info(
-        "Easify L1→L3 | snippets=%s paths | model=%s | cache_ttl=%ss | live_enrich=%s",
+        "Easify L0→L3 | snippets=%s | model=%s | tray=%s | palette=%s",
         len(settings.snippets_paths),
         settings.ollama_model,
-        settings.cache_ttl_sec or "off",
-        "on" if settings.live_cache_enrich else "off",
+        "on" if settings.tray_enabled else "off",
+        "on" if settings.palette_hotkey.strip() else "off",
     )
 
     stop = threading.Event()
+    hotkey_listener = None
+
+    if settings.palette_hotkey.strip():
+        try:
+            from pynput import keyboard as kb
+
+            from app.ui.palette import open_expansion_palette
+
+            hk_str = settings.palette_hotkey.strip()
+
+            def _palette() -> None:
+                threading.Thread(
+                    target=lambda: open_expansion_palette(service, settings),
+                    daemon=True,
+                ).start()
+
+            hotkey_listener = kb.GlobalHotKeys({hk_str: _palette})
+            hotkey_listener.start()
+            LOG.info("palette hotkey registered: %s", hk_str)
+        except Exception as e:
+            LOG.warning("palette hotkey failed (%s); check pynput hotkey grammar", e)
+
+    if settings.tray_enabled:
+
+        def _tray_stop() -> None:
+            stop.set()
+
+        from app.ui.tray import run_tray_app
+
+        threading.Thread(
+            target=lambda: run_tray_app(service, stop, _tray_stop),
+            daemon=True,
+            name="easify-tray",
+        ).start()
 
     def _stop(*_: object) -> None:
         stop.set()
@@ -80,7 +120,15 @@ def main() -> None:
         enter_backspaces=settings.enter_backspaces,
         debug=settings.debug_keys,
     )
-    listener.run_blocking(stop)
+    try:
+        listener.run_blocking(stop)
+    finally:
+        if hotkey_listener is not None:
+            try:
+                hotkey_listener.stop()
+            except Exception:
+                pass
+        service.cache.close()
 
 
 if __name__ == "__main__":

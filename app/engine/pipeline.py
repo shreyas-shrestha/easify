@@ -1,4 +1,4 @@
-"""Layered resolution: L1 snippets/autocorrect → L2 fuzzy/cache → L3 Ollama."""
+"""Layered resolution: L0 compute → L1 snippets/autocorrect → L2 fuzzy/cache → L3 Ollama."""
 
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ from app.ai import prompts
 from app.ai.ollama import OllamaClient
 from app.autocorrect.engine import AutocorrectEngine
 from app.cache.store import SqliteExpansionCache
+from app.engine.l0_compute import FxRateCache, try_l0_async
 from app.snippets.engine import SnippetEngine
 from app.utils.log import get_logger
 
@@ -37,6 +38,7 @@ class ExpansionPipeline:
         autocorrect: AutocorrectEngine,
         cache: SqliteExpansionCache,
         ollama: OllamaClient,
+        fx_cache: FxRateCache,
         verbose: bool = False,
         perf: bool = False,
     ) -> None:
@@ -44,6 +46,7 @@ class ExpansionPipeline:
         self.autocorrect = autocorrect
         self.cache = cache
         self.ollama = ollama
+        self.fx_cache = fx_cache
         self._verbose = verbose
         self._perf = perf
 
@@ -108,6 +111,17 @@ class ExpansionPipeline:
 
         if not capture.strip():
             return ExpansionOutcome("", "empty", (time.perf_counter() - t0) * 1000)
+
+        t_l0 = time.perf_counter()
+        l0 = await try_l0_async(capture, http, self.fx_cache)
+        if l0:
+            text, layer = l0
+            ms = (time.perf_counter() - t0) * 1000.0
+            if self._perf:
+                LOG.info("L0 compute (ms): %s", round((time.perf_counter() - t_l0) * 1000.0, 3))
+            if self._verbose:
+                LOG.info("%s (%s ms)", layer, round(ms, 2))
+            return ExpansionOutcome(text, layer, ms)
 
         det, _ = self.try_deterministic_capture(capture, t0)
         if det is not None:

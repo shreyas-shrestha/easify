@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "easify"
-version = "0.3.2"
+version = "0.4.0"
 description = "Cross-platform AI text expansion: layered snippets, autocorrect, cache, local Ollama"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -13,8 +13,11 @@ authors = [{ name = "Easify contributors" }]
 keywords = ["ollama", "expander", "keyboard", "ai", "pynput", "httpx", "easify"]
 dependencies = [
     "httpx>=0.27.0",
+    "pint>=0.23",
+    "pillow>=10.0.0",
     "pynput>=1.7.6",
     "pyperclip>=1.9.0",
+    "pystray>=0.19.4",
     "rapidfuzz>=3.0.0",
     "tomli>=2.0.1",
 ]

@@ -86,6 +86,24 @@ def apply_toml_to_settings(obj: Any, data: Mapping[str, Any]) -> None:
             pass
 
     take_str("trigger", "EASIFY_TRIGGER", "OLLAMA_EXPANDER_TRIGGER")
+    take_bool("use_prefix_trigger", "EASIFY_ACTIVATION_PREFIX", key="activation_prefix")
+    take_bool("double_space_activation", "EASIFY_ACTIVATION_DOUBLE_SPACE", key="activation_double_space")
+    take_int(
+        "double_space_window_ms",
+        "EASIFY_DOUBLE_SPACE_WINDOW_MS",
+        key="double_space_window_ms",
+        lo=100,
+        hi=3000,
+    )
+    take_str("palette_hotkey", "EASIFY_PALETTE_HOTKEY", key="palette_hotkey")
+    take_int(
+        "capture_max_chars",
+        "EASIFY_CAPTURE_MAX_CHARS",
+        key="capture_max_chars",
+        lo=256,
+        hi=100_000,
+    )
+    take_bool("tray_enabled", "EASIFY_TRAY", key="tray")
     take_str("ollama_url", "OLLAMA_URL", key="ollama_url")
     take_str("ollama_model", "EASIFY_MODEL", "OLLAMA_MODEL", key="model")
 
