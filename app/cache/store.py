@@ -69,6 +69,19 @@ class SqliteExpansionCache:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_ai_cache_last ON ai_cache(last_used);")
         self._migrate(conn)
 
+    def _row_if_live(
+        self, conn: sqlite3.Connection, k: str, row: sqlite3.Row, *, now: float
+    ) -> Optional[sqlite3.Row]:
+        if self._entry_ttl_sec > 0:
+            try:
+                created = float(row["created_at"])
+            except (TypeError, ValueError):
+                created = now
+            if now - created > float(self._entry_ttl_sec):
+                conn.execute("DELETE FROM ai_cache WHERE key = ?", (k,))
+                return None
+        return row
+
     def lookup(self, model: str, prompt: str) -> tuple[Optional[str], int, str]:
         """Return (response or None, hit_count after touch, source). Miss → (None, 0, '')."""
         k = _cache_key(model, prompt.strip())
@@ -83,14 +96,9 @@ class SqliteExpansionCache:
             row = cur.fetchone()
             if not row:
                 return None, 0, ""
-            if self._entry_ttl_sec > 0:
-                try:
-                    created = float(row["created_at"])
-                except (TypeError, ValueError):
-                    created = now
-                if now - created > float(self._entry_ttl_sec):
-                    conn.execute("DELETE FROM ai_cache WHERE key = ?", (k,))
-                    return None, 0, ""
+            row = self._row_if_live(conn, k, row, now=now)
+            if row is None:
+                return None, 0, ""
             conn.execute(
                 "UPDATE ai_cache SET hit_count = hit_count + 1, last_used = ? WHERE key = ?",
                 (now, k),
@@ -99,6 +107,24 @@ class SqliteExpansionCache:
             r2 = cur2.fetchone()
             hits = int(r2["hit_count"]) if r2 else int(row["hit_count"]) + 1
             return str(row["response"]), hits, str(row["src"] or "ai")
+
+    def peek(self, model: str, prompt: str) -> Optional[str]:
+        """Read cached response without updating hit_count or last_used (prewarm / diagnostics)."""
+        k = _cache_key(model, prompt.strip())
+        now = time.time()
+        with self._lock:
+            conn = self._ensure_connection()
+            cur = conn.execute(
+                "SELECT response, created_at FROM ai_cache WHERE key = ?",
+                (k,),
+            )
+            row = cur.fetchone()
+            if not row:
+                return None
+            row = self._row_if_live(conn, k, row, now=now)
+            if row is None:
+                return None
+            return str(row["response"])
 
     def get(self, model: str, prompt: str) -> Optional[str]:
         text, _, _ = self.lookup(model, prompt)

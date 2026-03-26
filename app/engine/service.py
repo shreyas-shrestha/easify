@@ -9,7 +9,6 @@ import threading
 import time
 import traceback
 from collections import deque
-from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
 
 import httpx
@@ -27,7 +26,11 @@ from app.context.focus import (
 )
 from app.engine.l0_compute import FxRateCache
 from app.engine.live_word import live_cache_prompt
+from app.engine.pending_tail import PendingExpansionTail
 from app.engine.pipeline import ExpansionPipeline
+from app.engine.tray_controller import TrayController
+from app.engine.types import ExpansionJob, LiveEnrichJob, TraySnapshot, UndoFrame
+from app.engine.undo_stack import UndoStack
 from app.snippets.engine import SnippetEngine
 from app.utils import clipboard as cb
 from app.utils.expansion_log import append_expansion_record
@@ -37,62 +40,15 @@ from app.utils.metrics import Metrics
 
 LOG = get_logger(__name__)
 
+# Expansion worker: limit tight loops when ``pipeline.expand`` or later stages fail repeatedly.
+_CONSUME_BACKOFF_CAP_S = 30.0
+_CONSUME_BACKOFF_BASE_S = 0.5
+_CONSUME_CIRCUIT_AFTER = 5
+_CONSUME_CIRCUIT_EXTRA_S = 12.0
+_DEAD_LETTER_MAX = 48
 
-@dataclass
-class ExpansionJob:
-    capture: str
-    delete_count: int
-    prior_words: str = ""
-    # Re-type after removing injection (e.g. trigger + intent); empty → delete injected text only (palette).
-    undo_restore: str = ""
-    # macOS process name from System Events when capture was submitted (inject refocus).
-    focused_app_at_submit: str = ""
-
-
-@dataclass
-class UndoFrame:
-    injected: str
-    restore: str
-    # True when expansion used OS accessibility string swap (undo uses same path).
-    via_accessibility: bool = False
-
-
-@dataclass(frozen=True)
-class TraySnapshot:
-    status: str
-    detail: str
-    error: str
-    model: str
-    expansion_queued: int
-    enrich_queued: int
-    undo_depth: int
-    # Monotonic seconds in "thinking" (0 if idle); LLM wall-clock cap for tooltip context.
-    thinking_elapsed_s: float
-    thinking_capture: str
-    l3_timeout_s: float
-    degraded_hint: str
-
-
-@dataclass(frozen=True)
-class LiveEnrichJob:
-    dedup_key: str
-    cache_prompt: str
-    user_text: str
-    system: str
-
-
-@dataclass
-class _PendingExpansionTail:
-    """Keys typed after capture submit, applied together when the expansion is injected.
-
-    Lock order: acquire ``ExpansionService._pending_tail_lock`` before ``pe.lock``.
-    Inject/undo holds ``_inject_lock`` first, then ``_pending_tail_lock`` (see ``_pop_tail_for_job``).
-    """
-
-    job: ExpansionJob
-    tail: list[str] = field(default_factory=list)
-    lock: threading.Lock = field(default_factory=threading.Lock)
-    last_activity_mono: float = 0.0
+# Tests historically imported the private name; ``PendingExpansionTail`` is the supported type.
+_PendingExpansionTail = PendingExpansionTail
 
 
 class ExpansionService:
@@ -138,22 +94,24 @@ class ExpansionService:
         self._enrich_rate_window: deque[float] = deque()
         self._ready = threading.Event()
         self._inject_lock = threading.Lock()
-        self._tray_lock = threading.Lock()
-        self._tray_status = "idle"
-        self._tray_detail = ""
-        self._tray_last_success_detail = ""
-        self._tray_last_error = ""
-        self._tray_degraded_hint = ""
-        self._tray_thinking_started_mono: float = 0.0
-        self._tray_thinking_capture: str = ""
+        self._tray = TrayController(settings)
         self._delete_fn: Optional[Callable[[int], None]] = None
         self._paste_fn: Optional[Callable[[str], None]] = None
         self._type_fn: Optional[Callable[[str], None]] = None
         self._cursor_left_fn: Optional[Callable[[int], None]] = None
-        self._undo_stack: deque[UndoFrame] = deque()
-        self._undo_lock = threading.Lock()
-        self._pending_tails: deque[_PendingExpansionTail] = deque()
+        self._undo = UndoStack(settings.undo_stack_max)
+        self._pending_tails: deque[PendingExpansionTail] = deque()
         self._pending_tail_lock = threading.Lock()
+        self._consume_consecutive_failures = 0
+        self._expansion_dead_letter: deque[dict[str, Any]] = deque(maxlen=_DEAD_LETTER_MAX)
+
+    @property
+    def _undo_lock(self) -> threading.Lock:
+        return self._undo.lock
+
+    @property
+    def _undo_stack(self) -> deque[UndoFrame]:
+        return self._undo.items
 
     def has_pending_expansion_tail(self) -> bool:
         with self._pending_tail_lock:
@@ -165,13 +123,7 @@ class ExpansionService:
             if not self._pending_tails:
                 return
             pe = self._pending_tails[0]
-        with pe.lock:
-            if ch == "\b":
-                if pe.tail:
-                    pe.tail.pop()
-            else:
-                pe.tail.append(ch)
-            pe.last_activity_mono = time.monotonic()
+        pe.append_char(ch)
 
     def _pop_tail_for_job(self, job: ExpansionJob) -> str:
         """Remove head pending tail if it matches job; return concatenated tail text."""
@@ -182,8 +134,7 @@ class ExpansionService:
                 )
                 return ""
             pe = self._pending_tails.popleft()
-        with pe.lock:
-            return "".join(pe.tail)
+        return pe.drain_joined()
 
     def _discard_pending_tail(self, job: ExpansionJob) -> None:
         with self._pending_tail_lock:
@@ -211,19 +162,9 @@ class ExpansionService:
             self.snippets.reload()
 
     def set_undo_frame(self, injected: str, restore: str, *, via_accessibility: bool = False) -> None:
-        if not injected:
-            return
-        with self._undo_lock:
-            self._undo_stack.append(
-                UndoFrame(
-                    injected=injected,
-                    restore=restore,
-                    via_accessibility=via_accessibility,
-                )
-            )
-            cap = max(1, self.settings.undo_stack_max)
-            while len(self._undo_stack) > cap:
-                self._undo_stack.popleft()
+        self._undo.push(
+            UndoFrame(injected=injected, restore=restore, via_accessibility=via_accessibility)
+        )
 
     def _undo_apply_frame(self, frame: UndoFrame) -> bool:
         if frame.via_accessibility:
@@ -286,14 +227,12 @@ class ExpansionService:
                 return False
 
     def try_undo(self) -> bool:
-        with self._undo_lock:
-            if not self._undo_stack:
-                return False
-            frame = self._undo_stack.pop()
+        frame = self._undo.pop()
+        if frame is None:
+            return False
         ok = self._undo_apply_frame(frame)
         if not ok:
-            with self._undo_lock:
-                self._undo_stack.append(frame)
+            self._undo.push(frame)
         return ok
 
     def set_inject(
@@ -330,69 +269,25 @@ class ExpansionService:
     def tray_snapshot(self) -> TraySnapshot:
         exp_q = self._queue.qsize() if self._queue is not None else 0
         enr_q = self._enrich_queue.qsize() if self._enrich_queue is not None else 0
-        model = self.cache_model_id
-        now = time.monotonic()
-        with self._tray_lock:
-            st = self._tray_status
-            det = self._tray_detail
-            err = self._tray_last_error
-            deg = self._tray_degraded_hint
-            t0 = self._tray_thinking_started_mono
-            cap_prev = self._tray_thinking_capture
-        with self._undo_lock:
-            udepth = len(self._undo_stack)
-        elapsed = (now - t0) if (st == "thinking" and t0 > 0) else 0.0
-        return TraySnapshot(
-            status=st,
-            detail=det,
-            error=err,
-            model=model,
+        return self._tray.snapshot(
             expansion_queued=exp_q,
             enrich_queued=enr_q,
-            undo_depth=udepth,
-            thinking_elapsed_s=elapsed,
-            thinking_capture=cap_prev,
-            l3_timeout_s=float(self.settings.ollama_timeout_s),
-            degraded_hint=deg,
+            undo_depth=self._undo.depth(),
+            cache_model_id=self.cache_model_id,
         )
 
     def tray_set_thinking(self, preview: str = "") -> None:
-        with self._tray_lock:
-            self._tray_status = "thinking"
-            self._tray_detail = preview[:220]
-            self._tray_thinking_capture = preview[:220]
-            self._tray_thinking_started_mono = time.monotonic()
-            self._tray_last_error = ""
-            self._tray_degraded_hint = ""
+        self._tray.set_thinking(preview)
 
     def tray_set_idle(self, last_expansion: str = "") -> None:
-        with self._tray_lock:
-            self._tray_status = "idle"
-            self._tray_detail = last_expansion[:220]
-            self._tray_last_success_detail = self._tray_detail
-            self._tray_last_error = ""
-            self._tray_degraded_hint = ""
-            self._tray_thinking_started_mono = 0.0
-            self._tray_thinking_capture = ""
+        self._tray.set_idle(last_expansion)
 
     def tray_set_error(self, message: str, *, degraded_hint: str = "") -> None:
-        with self._tray_lock:
-            self._tray_status = "error"
-            self._tray_last_error = (message or "")[:8000]
-            self._tray_detail = (message or "")[:500]
-            self._tray_degraded_hint = (degraded_hint or "")[:500]
-            self._tray_thinking_started_mono = 0.0
-            self._tray_thinking_capture = ""
+        self._tray.set_error(message, degraded_hint=degraded_hint)
 
     def tray_clear_error(self) -> None:
         """Clear error state from the tray after the user has read or copied the message."""
-        with self._tray_lock:
-            if self._tray_status != "error":
-                return
-            self._tray_status = "idle"
-            self._tray_last_error = ""
-            self._tray_degraded_hint = ""
-            self._tray_detail = self._tray_last_success_detail
+        self._tray.clear_error()
 
     def reload_snippets_hot(self) -> None:
         """Reload snippet JSON from disk (daemon hook or snippet UI notify)."""
@@ -563,7 +458,7 @@ class ExpansionService:
             LOG.error("worker not ready")
             return
         with self._pending_tail_lock:
-            self._pending_tails.append(_PendingExpansionTail(job=job))
+            self._pending_tails.append(PendingExpansionTail(job))
         asyncio.run_coroutine_threadsafe(self._queue.put(job), self._loop)
 
     def stop(self) -> None:
@@ -617,6 +512,7 @@ class ExpansionService:
                     prior_words=job.prior_words,
                     clipboard_snippet=clip_snippet,
                 )
+                self._consume_consecutive_failures = 0
                 journal_layer = outcome.layer
                 journal_text = outcome.text or ""
                 if not outcome.text:
@@ -662,6 +558,8 @@ class ExpansionService:
                     inject=inject_kind,
                 )
             except Exception as e:
+                self._consume_consecutive_failures += 1
+                streak = self._consume_consecutive_failures
                 self._discard_pending_tail(job)
                 self._journal_expansion(
                     job,
@@ -669,6 +567,14 @@ class ExpansionService:
                     result_text=journal_text,
                     ok=False,
                     error=str(e),
+                )
+                self._expansion_dead_letter.append(
+                    {
+                        "capture": (job.capture or "")[:240],
+                        "error": str(e)[:400],
+                        "layer": journal_layer,
+                        "streak": streak,
+                    }
                 )
                 lump = f"{e}\n{traceback.format_exc()}"
                 hint = ""
@@ -685,49 +591,37 @@ class ExpansionService:
                         "The model may be overloaded or the prompt too large."
                     )
                 self.tray_set_error(lump, degraded_hint=hint)
-                LOG.exception("expansion failed: %s", e)
+                LOG.exception("expansion failed (consecutive=%s): %s", streak, e)
+                extra = _CONSUME_CIRCUIT_EXTRA_S if streak >= _CONSUME_CIRCUIT_AFTER else 0.0
+                delay = min(
+                    _CONSUME_BACKOFF_CAP_S,
+                    _CONSUME_BACKOFF_BASE_S * (2 ** min(streak, 10)),
+                ) + extra
+                if extra:
+                    LOG.error(
+                        "expansion worker circuit: %s consecutive failures — added %.0fs pause before next job",
+                        streak,
+                        extra,
+                    )
+                LOG.info("expansion worker backoff %.1fs after error (streak=%s)", delay, streak)
+                await asyncio.sleep(delay)
 
     def _wait_tail_quiet(self, job: ExpansionJob) -> None:
-        """Brief pause so «parallel tail» is stable before inject (reduces interleaved real vs synthetic keys)."""
+        """Wait until parallel tail is idle (condition + deadline) before inject."""
         settle = self.settings.inject_settle_ms / 1000.0
         if settle <= 0:
             return
         max_wait = max(0.05, self.settings.inject_settle_max_wait_ms / 1000.0)
         deadline = time.monotonic() + max_wait
-        while time.monotonic() < deadline:
-            with self._pending_tail_lock:
-                if not self._pending_tails or self._pending_tails[0].job is not job:
-                    return
-                pe = self._pending_tails[0]
-            with pe.lock:
-                if not pe.tail:
-                    return
-                idle_for = time.monotonic() - pe.last_activity_mono
-            if idle_for >= settle:
+        with self._pending_tail_lock:
+            if not self._pending_tails or self._pending_tails[0].job is not job:
                 return
-            time.sleep(min(0.02, max(0.004, settle / 5)))
-        LOG.debug("inject tail settle: max wait exceeded, injecting anyway")
+            pe = self._pending_tails[0]
+        pe.wait_idle_until(settle_s=settle, deadline_mono=deadline)
 
     async def _wait_tail_quiet_async(self, job: ExpansionJob) -> None:
-        """Async tail settle — avoids blocking a ``asyncio.to_thread`` pool worker for seconds."""
-        settle = self.settings.inject_settle_ms / 1000.0
-        if settle <= 0:
-            return
-        max_wait = max(0.05, self.settings.inject_settle_max_wait_ms / 1000.0)
-        deadline = time.monotonic() + max_wait
-        while time.monotonic() < deadline:
-            with self._pending_tail_lock:
-                if not self._pending_tails or self._pending_tails[0].job is not job:
-                    return
-                pe = self._pending_tails[0]
-            with pe.lock:
-                if not pe.tail:
-                    return
-                idle_for = time.monotonic() - pe.last_activity_mono
-            if idle_for >= settle:
-                return
-            await asyncio.sleep(min(0.02, max(0.004, settle / 5)))
-        LOG.debug("inject tail settle: max wait exceeded, injecting anyway")
+        """Tail settle on a worker thread so the asyncio loop is not polled for seconds."""
+        await asyncio.to_thread(self._wait_tail_quiet, job)
 
     def _apply_replacement(self, job: ExpansionJob, text: str, layer: str) -> str:
         if self._delete_fn is None or self._paste_fn is None:
@@ -880,7 +774,7 @@ class ExpansionService:
             w = item.strip()
             if not w:
                 continue
-            _ = self.cache.get(m, live_cache_prompt(w.lower()))
+            self.cache.peek(m, live_cache_prompt(w.lower()))
             n += 1
         self.snippets.reload()
         self.autocorrect.reload()

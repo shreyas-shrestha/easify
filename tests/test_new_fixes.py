@@ -40,6 +40,22 @@ def test_metrics_multiple_incr_accumulate(tmp_path: Path) -> None:
     assert data["counters"]["a"] == 5
 
 
+# ── cache peek (prewarm must not inflate hit_count) ──────────────────────────
+
+
+def test_cache_peek_does_not_touch_hit_count(tmp_path: Path) -> None:
+    from app.cache.store import SqliteExpansionCache
+
+    db = SqliteExpansionCache(tmp_path / "c.db")
+    db.put("model-a", "prompt p", "response", source="ai")
+    _, hits_after_put, _ = db.lookup("model-a", "prompt p")
+    assert hits_after_put == 2
+    assert db.peek("model-a", "prompt p") == "response"
+    assert db.peek("model-a", "prompt p") == "response"
+    _, hits_after, _ = db.lookup("model-a", "prompt p")
+    assert hits_after == 3
+
+
 # ── pint singleton ──────────────────────────────────────────────────────────
 
 
@@ -488,6 +504,8 @@ def test_inject_tail_settle_waits_for_quiet(monkeypatch: pytest.MonkeyPatch) -> 
     monkeypatch.setenv("EASIFY_INJECT_SETTLE_MAX_WAIT_MS", "5000")
     import time
 
+    import app.engine.pending_tail as pending_tail_mod
+
     from app.config.settings import Settings
     from app.engine.service import ExpansionJob, ExpansionService, _PendingExpansionTail
 
@@ -505,16 +523,17 @@ def test_inject_tail_settle_waits_for_quiet(monkeypatch: pytest.MonkeyPatch) -> 
         return clock[0]
 
     monkeypatch.setattr(time, "monotonic", fake_mono)
-    sleeps: list[float] = []
+    waits: list[float] = []
 
-    def fake_sleep(d: float) -> None:
-        sleeps.append(d)
+    def fake_cond_wait(cond: object, timeout: float) -> bool:
+        waits.append(timeout)
         clock[0] += 0.15
+        return False
 
-    monkeypatch.setattr(time, "sleep", fake_sleep)
+    monkeypatch.setattr(pending_tail_mod, "_condition_wait_impl", fake_cond_wait)
     svc._wait_tail_quiet(job)
 
-    assert sleeps, "expected settle loop to sleep once before idle>=settle"
+    assert waits, "expected tail settle to wait on condition before idle>=settle"
     with pe.lock:
         assert pe.tail == ["x"]
 

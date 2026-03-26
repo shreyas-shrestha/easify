@@ -4,14 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import time
-from dataclasses import dataclass
-from typing import TYPE_CHECKING, Callable, Optional
+from typing import TYPE_CHECKING, Optional
 
 import httpx
 
 from app.ai import prompts
 from app.autocorrect.engine import AutocorrectEngine
 from app.cache.store import SqliteExpansionCache
+from app.engine.expansion_contracts import CacheTouchHandler, ExpansionOutcome
 from app.engine.l0_compute import FxRateCache, try_l0_async
 from app.snippets.engine import SnippetEngine
 from app.snippets.template import expand_snippet_template
@@ -23,13 +23,6 @@ if TYPE_CHECKING:
     from app.snippets.semantic_index import SnippetSemanticIndex
 
 LOG = get_logger(__name__)
-
-
-@dataclass
-class ExpansionOutcome:
-    text: str
-    layer: str
-    ms: float
 
 
 def _cache_prompt(model: str, normalized_prompt: str, system: str) -> str:
@@ -46,7 +39,7 @@ class ExpansionPipeline:
         llm: "ChatProvider",
         fx_cache: FxRateCache,
         semantic_index: Optional["SnippetSemanticIndex"] = None,
-        on_cache_touch: Optional[Callable[[str, str, int, str], None]] = None,
+        on_cache_touch: Optional[CacheTouchHandler] = None,
         snippet_namespace_lenient: bool = False,
         verbose: bool = False,
         perf: bool = False,
@@ -176,6 +169,104 @@ class ExpansionPipeline:
             self._log_perf(stage_ms)
         return None
 
+    async def _expand_l0(self, capture: str, http: httpx.AsyncClient, t0: float) -> Optional[ExpansionOutcome]:
+        t_l0 = time.perf_counter()
+        l0 = await try_l0_async(capture, http, self.fx_cache)
+        if not l0:
+            return None
+        text, layer = l0
+        ms = (time.perf_counter() - t0) * 1000.0
+        if self._perf:
+            LOG.info("L0 compute (ms): %s", round((time.perf_counter() - t_l0) * 1000.0, 3))
+        if self._verbose:
+            LOG.info("%s (%s ms)", layer, round(ms, 2))
+        return ExpansionOutcome(text, layer, ms)
+
+    async def _expand_semantic_match(
+        self,
+        corrected: str,
+        t0: float,
+        *,
+        focused_app: str,
+        clipboard_snippet: str,
+        stage_ms: dict[str, float],
+    ) -> Optional[ExpansionOutcome]:
+        if self.semantic_index is None:
+            return None
+        await asyncio.to_thread(self.semantic_index.prepare_sync)
+        t_sem = time.perf_counter()
+        hit = await asyncio.to_thread(self.semantic_index.find_best, corrected, focused_app)
+        stage_ms["snippet_semantic"] = (time.perf_counter() - t_sem) * 1000.0
+        if not hit:
+            return None
+        ms = (time.perf_counter() - t0) * 1000.0
+        if self._perf:
+            self._log_perf(stage_ms)
+        if self._verbose:
+            LOG.info("L2 snippet semantic score=%s (%s ms)", hit.score, round(ms, 2))
+        sem = ExpansionOutcome(hit.value, "L2-snippet-semantic", ms)
+        return await self._finalize_snippet_value_async(
+            sem, focused_app=focused_app, clipboard_hint=clipboard_snippet
+        )
+
+    async def _expand_contextual_cache_hit(
+        self,
+        *,
+        corrected: str,
+        t0: float,
+        focused_app: str,
+        prior_words: str,
+        clipboard_snippet: str,
+    ) -> Optional[ExpansionOutcome]:
+        user_prompt, base_system = prompts.classify(corrected)
+        system_full = prompts.attach_context(
+            base_system,
+            focused_app=focused_app,
+            prior_words=prior_words,
+            clipboard_snippet=clipboard_snippet,
+        )
+        ck = _cache_prompt(self.llm.cache_model_id, user_prompt, system_full)
+        cached, hit_count, src = self.cache.lookup(self.llm.cache_model_id, ck)
+        if not cached:
+            return None
+        self._notify_cache_touch(ck, cached, hit_count, src)
+        ms = (time.perf_counter() - t0) * 1000.0
+        if self._verbose:
+            LOG.info("L2 cache hit (contextual) (%s ms)", round(ms, 2))
+        return ExpansionOutcome(cached, "L2-cache", ms)
+
+    async def _expand_l3_generate(
+        self,
+        *,
+        corrected: str,
+        http: httpx.AsyncClient,
+        t0: float,
+        focused_app: str,
+        prior_words: str,
+        clipboard_snippet: str,
+    ) -> ExpansionOutcome:
+        user_prompt, base_system = prompts.classify(corrected)
+        system_full = prompts.attach_context(
+            base_system,
+            focused_app=focused_app,
+            prior_words=prior_words,
+            clipboard_snippet=clipboard_snippet,
+        )
+        ck = _cache_prompt(self.llm.cache_model_id, user_prompt, system_full)
+        mid = self.llm.cache_model_id
+        LOG.info("L3 %s generate model=%s", self.llm.name, mid)
+        t_ai = time.perf_counter()
+        text = await self.llm.generate(http, user_prompt, system_full)
+        if self._perf:
+            LOG.info("L3 generate (ms): %s", round((time.perf_counter() - t_ai) * 1000.0, 3))
+        layer = f"L3-{self.llm.name}"
+        if text:
+            self.cache.put(self.llm.cache_model_id, ck, text, source="ai")
+        ms = (time.perf_counter() - t0) * 1000.0
+        if self._verbose:
+            LOG.info("L3 done (%s ms)", round(ms, 2))
+        return ExpansionOutcome(text, layer, ms)
+
     def try_deterministic_capture(
         self,
         capture: str,
@@ -219,20 +310,12 @@ class ExpansionPipeline:
         clipboard_snippet: str = "",
     ) -> ExpansionOutcome:
         t0 = time.perf_counter()
-
         if not capture.strip():
             return ExpansionOutcome("", "empty", (time.perf_counter() - t0) * 1000)
 
-        t_l0 = time.perf_counter()
-        l0 = await try_l0_async(capture, http, self.fx_cache)
-        if l0:
-            text, layer = l0
-            ms = (time.perf_counter() - t0) * 1000.0
-            if self._perf:
-                LOG.info("L0 compute (ms): %s", round((time.perf_counter() - t_l0) * 1000.0, 3))
-            if self._verbose:
-                LOG.info("%s (%s ms)", layer, round(ms, 2))
-            return ExpansionOutcome(text, layer, ms)
+        l0 = await self._expand_l0(capture, http, t0)
+        if l0 is not None:
+            return l0
 
         stage_ms: dict[str, float] = {}
         det, corrected = self._try_exact_and_fuzzy_snippets(
@@ -247,53 +330,35 @@ class ExpansionPipeline:
                 det, focused_app=focused_app, clipboard_hint=clipboard_snippet
             )
 
-        if self.semantic_index is not None:
-            await asyncio.to_thread(self.semantic_index.prepare_sync)
-            t_sem = time.perf_counter()
-            hit = await asyncio.to_thread(self.semantic_index.find_best, corrected, focused_app)
-            stage_ms["snippet_semantic"] = (time.perf_counter() - t_sem) * 1000.0
-            if hit:
-                ms = (time.perf_counter() - t0) * 1000.0
-                if self._perf:
-                    self._log_perf(stage_ms)
-                if self._verbose:
-                    LOG.info("L2 snippet semantic score=%s (%s ms)", hit.score, round(ms, 2))
-                sem = ExpansionOutcome(hit.value, "L2-snippet-semantic", ms)
-                return await self._finalize_snippet_value_async(
-                    sem, focused_app=focused_app, clipboard_hint=clipboard_snippet
-                )
+        sem_out = await self._expand_semantic_match(
+            corrected,
+            t0,
+            focused_app=focused_app,
+            clipboard_snippet=clipboard_snippet,
+            stage_ms=stage_ms,
+        )
+        if sem_out is not None:
+            return sem_out
 
         cache_hit = self._try_context_free_cache(corrected, t0, stage_ms)
         if cache_hit is not None:
             return cache_hit
 
-        user_prompt, base_system = prompts.classify(corrected)
-        system_full = prompts.attach_context(
-            base_system,
+        ctx_hit = await self._expand_contextual_cache_hit(
+            corrected=corrected,
+            t0=t0,
             focused_app=focused_app,
             prior_words=prior_words,
             clipboard_snippet=clipboard_snippet,
         )
-        ck = _cache_prompt(self.llm.cache_model_id, user_prompt, system_full)
+        if ctx_hit is not None:
+            return ctx_hit
 
-        cached, hit_count, src = self.cache.lookup(self.llm.cache_model_id, ck)
-        if cached:
-            self._notify_cache_touch(ck, cached, hit_count, src)
-            ms = (time.perf_counter() - t0) * 1000.0
-            if self._verbose:
-                LOG.info("L2 cache hit (contextual) (%s ms)", round(ms, 2))
-            return ExpansionOutcome(cached, "L2-cache", ms)
-
-        mid = self.llm.cache_model_id
-        LOG.info("L3 %s generate model=%s", self.llm.name, mid)
-        t_ai = time.perf_counter()
-        text = await self.llm.generate(http, user_prompt, system_full)
-        if self._perf:
-            LOG.info("L3 generate (ms): %s", round((time.perf_counter() - t_ai) * 1000.0, 3))
-        layer = f"L3-{self.llm.name}"
-        if text:
-            self.cache.put(self.llm.cache_model_id, ck, text, source="ai")
-        ms = (time.perf_counter() - t0) * 1000.0
-        if self._verbose:
-            LOG.info("L3 done (%s ms)", round(ms, 2))
-        return ExpansionOutcome(text, layer, ms)
+        return await self._expand_l3_generate(
+            corrected=corrected,
+            http=http,
+            t0=t0,
+            focused_app=focused_app,
+            prior_words=prior_words,
+            clipboard_snippet=clipboard_snippet,
+        )

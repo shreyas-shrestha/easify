@@ -17,6 +17,10 @@ from typing import Any, Dict, Iterator, Optional, cast
 
 import httpx
 
+from app.utils.log import get_logger
+
+LOG = get_logger(__name__)
+
 _UREG = None
 _UREG_LOCK = threading.Lock()
 
@@ -427,9 +431,21 @@ class FxRateCache:
                 except OSError:
                     pass
                 return f"{out:.6g} {to_u}"
-            except Exception:
+            except Exception as e:
+                LOG.warning(
+                    "Frankfurter FX failed (%s → %s, amount=%s): %s",
+                    frm_u,
+                    to_u,
+                    amount,
+                    e,
+                )
                 fb = await self._convert_open_er_api(client, amount, frm_u, to_u)
                 if fb is None:
+                    LOG.warning(
+                        "FX unavailable after Frankfurter + open.er-api failures (%s → %s)",
+                        frm_u,
+                        to_u,
+                    )
                     return None
                 out, meta = fb
                 rates_fb = meta.get("rates") if isinstance(meta.get("rates"), dict) else {}
@@ -463,4 +479,9 @@ async def try_l0_async(capture: str, http: httpx.AsyncClient, fx: FxRateCache) -
             out = await fx.convert(http, float(fxm.group("amt")), fxm.group("fc"), fxm.group("tc"))
             if out:
                 return out, "L0-currency"
+            LOG.warning(
+                "L0 currency pattern matched %r but FX returned no rate (network or API issue); "
+                "falling through to later layers",
+                cand.strip()[:120],
+            )
     return None

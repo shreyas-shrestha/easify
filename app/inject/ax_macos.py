@@ -7,11 +7,19 @@ Caret/selection behavior is defined by the target app when AXValue is set.
 
 from __future__ import annotations
 
+import time
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from typing import Any, Optional, Tuple
 
 from app.utils.log import get_logger
 
 LOG = get_logger(__name__)
+
+# AXUIElementCopyAttributeValue can block ~5s per call on a hung app; bound wall time per inject.
+_AX_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="easify-ax")
+_AX_FIND_TOTAL_BUDGET_S = 2.6
+_AX_PER_ATTR_MIN_S = 0.08
+_AX_PER_ATTR_MAX_S = 0.55
 
 _READ_ATTRS = ("AXValue", "AXTitle")
 _WRITE_ATTR = "AXValue"
@@ -53,6 +61,20 @@ def _copy_attr(elem: Any, name: str) -> Tuple[Any, Any]:
     return 0, out
 
 
+def _copy_attr_timed(elem: Any, name: str, *, deadline: float) -> Tuple[Any, Any]:
+    """Run AX read off the inject thread's direct wait so a stuck app cannot block for many seconds."""
+    now = time.monotonic()
+    if now >= deadline:
+        return -1, None
+    per = min(_AX_PER_ATTR_MAX_S, max(_AX_PER_ATTR_MIN_S, deadline - now))
+    fut = _AX_EXECUTOR.submit(_copy_attr, elem, name)
+    try:
+        return fut.result(timeout=per)
+    except FuturesTimeoutError:
+        LOG.warning("AX attribute %r read timed out (%.2fs)", name, per)
+        return -1, None
+
+
 def _set_attr(elem: Any, name: str, value: str) -> bool:
     from ApplicationServices import AXUIElementSetAttributeValue
 
@@ -85,18 +107,22 @@ def _focused_element() -> Optional[Any]:
 
 def _find_editable_value(elem: Optional[Any]) -> Tuple[Optional[Any], Optional[str]]:
     """Walk up AXParent until AXValue/AXTitle yields non-empty string suitable for replace."""
+    deadline = time.monotonic() + _AX_FIND_TOTAL_BUDGET_S
     cur = elem
     for _ in range(_MAX_PARENT_HOPS):
         if cur is None:
             break
+        if time.monotonic() >= deadline:
+            LOG.warning("AX find editable: total budget (%.1fs) exceeded", _AX_FIND_TOTAL_BUDGET_S)
+            break
         for attr in _READ_ATTRS:
-            err, val = _copy_attr(cur, attr)
+            err, val = _copy_attr_timed(cur, attr, deadline=deadline)
             if not _ax_err_ok(err):
                 continue
             s = _py_str(val)
             if s is not None:
                 return cur, s
-        _, parent = _copy_attr(cur, "AXParent")
+        _, parent = _copy_attr_timed(cur, "AXParent", deadline=deadline)
         cur = parent
     return None, None
 
