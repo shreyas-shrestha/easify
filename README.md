@@ -72,6 +72,7 @@ Cache keys for **contextual** L3 rows include the augmented system string (app +
 | Command | Purpose |
 |---------|---------|
 | `easify doctor` | Prints **ok** / **warn** / **FAIL** for config paths, cache writability, and your AI backend (Ollama `GET /api/tags`, or API keys for OpenAI/Anthropic). Use `--strict` to exit with an error if anything warns. |
+| **Startup L3 hints** | On `easify run`, a **~3s** probe logs **warnings** if the configured AI backend is missing (no API key, Ollama down, or model not in `/api/tags`). Disable with `EASIFY_STARTUP_HEALTH=0`. Semantic snippet **query** encoding runs in `asyncio.to_thread` so the event loop stays responsive. |
 | `easify autostart install` | **macOS:** `~/Library/LaunchAgents/com.easify.app.plist` + `launchctl bootstrap`. **Linux:** `~/.config/systemd/user/easify.service` + `systemctl --user enable --now`. **Windows:** Startup folder `easify_autostart.bat`. Uses `easify` on `PATH`, else `python -m app`. |
 | `easify autostart remove` | Unloads/removes the above. |
 | `easify autostart status` | Shows whether the plist/unit/batch file exists (and on macOS, `launchctl print`). |

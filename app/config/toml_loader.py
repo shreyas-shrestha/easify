@@ -153,6 +153,7 @@ def apply_toml_to_settings(obj: Any, data: Mapping[str, Any]) -> None:
     )
     take_bool("live_use_clipboard_fallback", "EASIFY_LIVE_CLIPBOARD_FALLBACK", key="live_clipboard_fallback")
     take_bool("prewarm", "EASIFY_PREWARM", key="prewarm")
+    take_bool("startup_health_check", "EASIFY_STARTUP_HEALTH", key="startup_health")
     take_int("cache_ttl_sec", "EASIFY_CACHE_TTL_SEC", key="cache_ttl_sec", lo=0, hi=86400 * 365)
     take_bool("live_cache_enrich", "EASIFY_LIVE_CACHE_ENRICH", key="live_cache_enrich")
     take_int("live_enrich_min_len", "EASIFY_LIVE_ENRICH_MIN_LEN", key="live_enrich_min_len", lo=1, hi=64)

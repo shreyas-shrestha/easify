@@ -94,6 +94,7 @@ class Settings:
     live_cooldown_ms: int = field(default_factory=lambda: max(0, int(_env("LIVE_COOLDOWN_MS", "150"))))
     live_use_clipboard_fallback: bool = field(default_factory=lambda: _env_bool("LIVE_CLIPBOARD_FALLBACK", True))
     prewarm: bool = field(default_factory=lambda: _env_bool("PREWARM", False))
+    startup_health_check: bool = field(default_factory=lambda: _env_bool("STARTUP_HEALTH", True))
 
     live_cache_enrich: bool = field(default_factory=lambda: _env_bool("LIVE_CACHE_ENRICH", False))
     live_enrich_min_len: int = field(default_factory=lambda: max(3, min(48, int(_env("LIVE_ENRICH_MIN_LEN", "4")))))

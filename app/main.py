@@ -91,6 +91,12 @@ def main() -> None:
     if settings.prewarm:
         service.prewarm_cache()
 
+    if settings.startup_health_check:
+        from app.cli.health import startup_l3_hints
+
+        for hint in startup_l3_hints(settings):
+            LOG.warning("%s", hint)
+
     LOG.info(
         "Easify L0→L3 | provider=%s | cache_model=%s | tray=%s | palette=%s | context_words=%s",
         settings.ai_provider,

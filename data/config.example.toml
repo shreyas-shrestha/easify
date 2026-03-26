@@ -22,6 +22,7 @@ cooldown_ms = 150
 phrase_buffer_max = 0
 
 prewarm = false
+# startup_health = true
 perf = false
 inject_prefer_type = true
 metrics = false

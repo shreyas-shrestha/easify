@@ -67,6 +67,73 @@ class ExpansionPipeline:
     def _log_perf(self, stage_ms: dict[str, float]) -> None:
         LOG.info("capture deterministic perf (ms): %s", stage_ms)
 
+    def _try_exact_and_fuzzy_snippets(
+        self,
+        capture: str,
+        t0: float,
+        *,
+        focused_app: str,
+        namespace_lenient: bool,
+        stage_ms: dict[str, float],
+    ) -> tuple[Optional[ExpansionOutcome], str]:
+        """Autocorrect + L1 exact + L2 fuzzy. Returns (hit or None, corrected phrase)."""
+        t = time.perf_counter()
+        corrected = self.autocorrect.apply_to_phrase(capture)
+        stage_ms["autocorrect_phrase"] = (time.perf_counter() - t) * 1000.0
+        if corrected != capture and self._verbose:
+            LOG.info("L1 autocorrect adjusted phrase")
+
+        t2 = time.perf_counter()
+        hit = self.snippets.resolve_exact(
+            corrected, focused_app=focused_app, namespace_lenient=namespace_lenient
+        )
+        stage_ms["snippet_exact"] = (time.perf_counter() - t2) * 1000.0
+        if hit:
+            ms = (time.perf_counter() - t0) * 1000.0
+            if self._perf:
+                self._log_perf(stage_ms)
+            if self._verbose:
+                LOG.info("L1 snippet exact (%s ms)", round(ms, 2))
+            return ExpansionOutcome(hit.value, "L1-snippet-exact", ms), corrected
+
+        t3 = time.perf_counter()
+        hit = self.snippets.resolve_fuzzy(
+            corrected, focused_app=focused_app, namespace_lenient=namespace_lenient
+        )
+        stage_ms["snippet_fuzzy"] = (time.perf_counter() - t3) * 1000.0
+        if hit:
+            ms = (time.perf_counter() - t0) * 1000.0
+            if self._perf:
+                self._log_perf(stage_ms)
+            if self._verbose:
+                LOG.info("L2 snippet fuzzy score=%s (%s ms)", hit.score, round(ms, 2))
+            return ExpansionOutcome(hit.value, "L2-snippet-fuzzy", ms), corrected
+
+        return None, corrected
+
+    def _try_context_free_cache(
+        self,
+        corrected: str,
+        t0: float,
+        stage_ms: dict[str, float],
+    ) -> Optional[ExpansionOutcome]:
+        user_prompt, system = prompts.classify(corrected)
+        ck = _cache_prompt(self.llm.cache_model_id, user_prompt, system)
+        t = time.perf_counter()
+        cached, hit_count, src = self.cache.lookup(self.llm.cache_model_id, ck)
+        stage_ms["cache"] = (time.perf_counter() - t) * 1000.0
+        if cached:
+            self._notify_cache_touch(ck, cached, hit_count, src)
+            ms = (time.perf_counter() - t0) * 1000.0
+            if self._perf:
+                self._log_perf(stage_ms)
+            if self._verbose:
+                LOG.info("L2 cache hit (%s ms)", round(ms, 2))
+            return ExpansionOutcome(cached, "L2-cache", ms)
+        if self._perf:
+            self._log_perf(stage_ms)
+        return None
+
     def try_deterministic_capture(
         self,
         capture: str,
@@ -76,44 +143,15 @@ class ExpansionPipeline:
         namespace_lenient: bool = False,
     ) -> tuple[Optional[ExpansionOutcome], dict[str, float]]:
         """
-        Stages: autocorrect phrase → snippet exact → snippet fuzzy → cache.
-        Returns (outcome or None, stage timings).
-        Cache key excludes rolling / focus context (stable across sessions).
+        Stages: autocorrect → exact → fuzzy → (semantic in :meth:`expand` via thread pool) → cache.
+        Use this from sync tests; full resolution including semantic happens in :meth:`expand`.
         """
         stage_ms: dict[str, float] = {}
-
-        t = time.perf_counter()
-        corrected = self.autocorrect.apply_to_phrase(capture)
-        stage_ms["autocorrect_phrase"] = (time.perf_counter() - t) * 1000.0
-        if corrected != capture and self._verbose:
-            LOG.info("L1 autocorrect adjusted phrase")
-
-        t = time.perf_counter()
-        hit = self.snippets.resolve_exact(
-            corrected, focused_app=focused_app, namespace_lenient=namespace_lenient
+        det, corrected = self._try_exact_and_fuzzy_snippets(
+            capture, t0, focused_app=focused_app, namespace_lenient=namespace_lenient, stage_ms=stage_ms
         )
-        stage_ms["snippet_exact"] = (time.perf_counter() - t) * 1000.0
-        if hit:
-            ms = (time.perf_counter() - t0) * 1000.0
-            if self._perf:
-                self._log_perf(stage_ms)
-            if self._verbose:
-                LOG.info("L1 snippet exact (%s ms)", round(ms, 2))
-            return ExpansionOutcome(hit.value, "L1-snippet-exact", ms), stage_ms
-
-        t = time.perf_counter()
-        hit = self.snippets.resolve_fuzzy(
-            corrected, focused_app=focused_app, namespace_lenient=namespace_lenient
-        )
-        stage_ms["snippet_fuzzy"] = (time.perf_counter() - t) * 1000.0
-        if hit:
-            ms = (time.perf_counter() - t0) * 1000.0
-            if self._perf:
-                self._log_perf(stage_ms)
-            if self._verbose:
-                LOG.info("L2 snippet fuzzy score=%s (%s ms)", hit.score, round(ms, 2))
-            return ExpansionOutcome(hit.value, "L2-snippet-fuzzy", ms), stage_ms
-
+        if det is not None:
+            return det, stage_ms
         if self.semantic_index is not None:
             t = time.perf_counter()
             hit = self.semantic_index.find_best(corrected, focused_app)
@@ -125,25 +163,8 @@ class ExpansionPipeline:
                 if self._verbose:
                     LOG.info("L2 snippet semantic score=%s (%s ms)", hit.score, round(ms, 2))
                 return ExpansionOutcome(hit.value, "L2-snippet-semantic", ms), stage_ms
-
-        user_prompt, system = prompts.classify(corrected)
-        ck = _cache_prompt(self.llm.cache_model_id, user_prompt, system)
-
-        t = time.perf_counter()
-        cached, hit_count, src = self.cache.lookup(self.llm.cache_model_id, ck)
-        stage_ms["cache"] = (time.perf_counter() - t) * 1000.0
-        if cached:
-            self._notify_cache_touch(ck, cached, hit_count, src)
-            ms = (time.perf_counter() - t0) * 1000.0
-            if self._perf:
-                self._log_perf(stage_ms)
-            if self._verbose:
-                LOG.info("L2 cache hit (%s ms)", round(ms, 2))
-            return ExpansionOutcome(cached, "L2-cache", ms), stage_ms
-
-        if self._perf:
-            self._log_perf(stage_ms)
-        return None, stage_ms
+        c = self._try_context_free_cache(corrected, t0, stage_ms)
+        return c, stage_ms
 
     async def expand(
         self,
@@ -169,19 +190,34 @@ class ExpansionPipeline:
                 LOG.info("%s (%s ms)", layer, round(ms, 2))
             return ExpansionOutcome(text, layer, ms)
 
-        if self.semantic_index is not None:
-            await asyncio.to_thread(self.semantic_index.prepare_sync)
-
-        det, _ = self.try_deterministic_capture(
+        stage_ms: dict[str, float] = {}
+        det, corrected = self._try_exact_and_fuzzy_snippets(
             capture,
             t0,
             focused_app=focused_app,
             namespace_lenient=self._snippet_namespace_lenient,
+            stage_ms=stage_ms,
         )
         if det is not None:
             return det
 
-        corrected = self.autocorrect.apply_to_phrase(capture)
+        if self.semantic_index is not None:
+            await asyncio.to_thread(self.semantic_index.prepare_sync)
+            t_sem = time.perf_counter()
+            hit = await asyncio.to_thread(self.semantic_index.find_best, corrected, focused_app)
+            stage_ms["snippet_semantic"] = (time.perf_counter() - t_sem) * 1000.0
+            if hit:
+                ms = (time.perf_counter() - t0) * 1000.0
+                if self._perf:
+                    self._log_perf(stage_ms)
+                if self._verbose:
+                    LOG.info("L2 snippet semantic score=%s (%s ms)", hit.score, round(ms, 2))
+                return ExpansionOutcome(hit.value, "L2-snippet-semantic", ms)
+
+        cache_hit = self._try_context_free_cache(corrected, t0, stage_ms)
+        if cache_hit is not None:
+            return cache_hit
+
         user_prompt, base_system = prompts.classify(corrected)
         system_full = prompts.attach_context(
             base_system,
