@@ -15,6 +15,15 @@ def test_l0_math_add() -> None:
     assert try_math("2 + 2") == "4"
 
 
+def test_l0_math_modulo_not_percent() -> None:
+    assert try_math("5 % 2") == "1"
+
+
+def test_l0_math_literal_percent() -> None:
+    out = try_math("25%")
+    assert out == "0.25" or out.startswith("0.25")
+
+
 def test_l0_date_today_plus_days() -> None:
     out = try_date_arithmetic("today + 1 days")
     assert out is not None

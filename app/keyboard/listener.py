@@ -122,6 +122,10 @@ class KeyboardListener:
         if ch in (" ", "\n"):
             self._live_flush()
             return
+        # Word boundary without space: "hello," should still push "hello" for rolling context + live resolve.
+        if self._live_chars and ch is not None and len(ch) == 1 and ch in ",.;:!?)]}\"'":
+            self._live_flush()
+            return
         self._live_clear()
 
     def _live_flush(self) -> None:
@@ -172,6 +176,8 @@ class KeyboardListener:
             self._delete_n(2)
         finally:
             self._inject_depth -= 1
+        if self.settings.double_space_settle_ms > 0:
+            time.sleep(self.settings.double_space_settle_ms / 1000.0)
         self._state = _STATE_CAPTURING
         self._capture.clear()
         self._trigger.reset()

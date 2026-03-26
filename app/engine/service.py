@@ -23,6 +23,7 @@ from app.engine.live_word import live_cache_prompt
 from app.engine.pipeline import ExpansionPipeline
 from app.snippets.engine import SnippetEngine
 from app.utils import clipboard as cb
+from app.utils.live_enrich_blocklist import should_skip_live_enrich_token
 from app.utils.log import get_logger
 from app.utils.metrics import Metrics
 
@@ -115,6 +116,7 @@ class ExpansionService:
             source=source,
             min_hits=self.settings.cache_promote_min_hits,
             allowed_sources=self.settings.cache_promote_source_set(),
+            max_promoted_keys=self.settings.cache_promote_max_keys,
         ):
             self.snippets.reload()
 
@@ -214,6 +216,8 @@ class ExpansionService:
             return
         w = word.strip()
         if len(w) < self.settings.live_enrich_min_len or len(w) > 64:
+            return
+        if should_skip_live_enrich_token(w):
             return
         if not self._enrich_under_rate_cap():
             return

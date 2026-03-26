@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "easify"
-version = "0.6.0"
+version = "0.6.1"
 description = "Cross-platform AI text expansion: layered snippets, autocorrect, cache, local Ollama"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -35,7 +35,7 @@ semantic = ["sentence-transformers>=2.2.0"]
 include = ["app*", "easify*"]
 
 [tool.setuptools.package-data]
-app = ["bundled/*.json"]
+app = ["bundled/*.json", "bundled/*.txt"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

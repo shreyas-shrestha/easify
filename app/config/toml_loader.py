@@ -213,6 +213,21 @@ def apply_toml_to_settings(obj: Any, data: Mapping[str, Any]) -> None:
     take_str("undo_hotkey", "EASIFY_UNDO_HOTKEY", key="undo_hotkey")
     take_str("ui_host", "EASIFY_UI_HOST", key="ui_host")
     take_int("ui_port", "EASIFY_UI_PORT", key="ui_port", lo=1, hi=65535)
+    take_str("ui_secret_token", "EASIFY_UI_SECRET_TOKEN", key="ui_secret_token")
+    take_int(
+        "cache_promote_max_keys",
+        "EASIFY_CACHE_PROMOTE_MAX_KEYS",
+        key="cache_promote_max_keys",
+        lo=0,
+        hi=100_000,
+    )
+    take_int(
+        "double_space_settle_ms",
+        "EASIFY_DOUBLE_SPACE_SETTLE_MS",
+        key="double_space_settle_ms",
+        lo=0,
+        hi=500,
+    )
 
 
 def merge_config_into_settings(obj: Any) -> None:

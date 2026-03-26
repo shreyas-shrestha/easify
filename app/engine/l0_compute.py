@@ -80,6 +80,20 @@ def try_math(s: str) -> Optional[str]:
     raw = s.strip().replace("×", "*").replace("÷", "/").replace("^", "**")
     if not raw or len(raw) > 200:
         return None
+    # Literal percent of a single number: "25%" → 0.25 (not "5 % 2" modulo).
+    pct = re.match(
+        r"^\s*([-+]?(?:\d*\.\d+|\d+))\s*%+\s*$",
+        raw,
+    )
+    if pct and "%" not in pct.group(1):
+        try:
+            v = float(pct.group(1)) / 100.0
+            if abs(v - round(v)) < 1e-12:
+                return str(int(round(v)))
+            s_out = f"{v:.12g}"
+            return s_out.rstrip("0").rstrip(".") or "0"
+        except ValueError:
+            return None
     if re.search(r"[a-zA-Z_]", raw):
         return None
     try:
@@ -131,6 +145,11 @@ class FxRateCache:
     _mem: Dict[str, Any] = field(default_factory=dict)
     _loaded_at: float = field(default=0.0)
 
+    def __post_init__(self) -> None:
+        import asyncio
+
+        self._conv_lock = asyncio.Lock()
+
     def _load_file(self) -> None:
         if not self.path.is_file():
             self._mem = {}
@@ -142,37 +161,38 @@ class FxRateCache:
             self._mem = {}
 
     async def convert(self, client: httpx.AsyncClient, amount: float, frm: str, to: str) -> Optional[str]:
-        frm_u, to_u = frm.upper(), to.upper()
-        if frm_u == to_u:
-            return f"{amount:g} {to_u}"
-        now = time.time()
-        if now - self._loaded_at > self.ttl_sec or not self._mem:
-            self._load_file()
-        base = str(self._mem.get("base", "")).upper()
-        rates = self._mem.get("rates") if isinstance(self._mem.get("rates"), dict) else {}
-        if now - self._loaded_at <= self.ttl_sec and base == frm_u and to_u in rates:
-            rate = float(rates[to_u])
-            return f"{amount * rate:.6g} {to_u}"
-        url = f"https://api.frankfurter.app/latest?from={frm_u}&to={to_u}"
-        try:
-            r = await client.get(url, timeout=15.0)
-            r.raise_for_status()
-            data = r.json()
-            rates_new = data.get("rates") or {}
-            if to_u not in rates_new:
-                return None
-            rate = float(rates_new[to_u])
-            out = amount * rate
-            self._mem = {"base": frm_u, "rates": rates_new, "date": data.get("date")}
-            self._loaded_at = time.time()
+        async with self._conv_lock:
+            frm_u, to_u = frm.upper(), to.upper()
+            if frm_u == to_u:
+                return f"{amount:g} {to_u}"
+            now = time.time()
+            if now - self._loaded_at > self.ttl_sec or not self._mem:
+                self._load_file()
+            base = str(self._mem.get("base", "")).upper()
+            rates = self._mem.get("rates") if isinstance(self._mem.get("rates"), dict) else {}
+            if now - self._loaded_at <= self.ttl_sec and base == frm_u and to_u in rates:
+                rate = float(rates[to_u])
+                return f"{amount * rate:.6g} {to_u}"
+            url = f"https://api.frankfurter.app/latest?from={frm_u}&to={to_u}"
             try:
-                self.path.parent.mkdir(parents=True, exist_ok=True)
-                self.path.write_text(json.dumps(self._mem), encoding="utf-8")
-            except OSError:
-                pass
-            return f"{out:.6g} {to_u}"
-        except Exception:
-            return None
+                r = await client.get(url, timeout=15.0)
+                r.raise_for_status()
+                data = r.json()
+                rates_new = data.get("rates") or {}
+                if to_u not in rates_new:
+                    return None
+                rate = float(rates_new[to_u])
+                out = amount * rate
+                self._mem = {"base": frm_u, "rates": rates_new, "date": data.get("date")}
+                self._loaded_at = time.time()
+                try:
+                    self.path.parent.mkdir(parents=True, exist_ok=True)
+                    self.path.write_text(json.dumps(self._mem), encoding="utf-8")
+                except OSError:
+                    pass
+                return f"{out:.6g} {to_u}"
+            except Exception:
+                return None
 
 
 async def try_l0_async(capture: str, http: httpx.AsyncClient, fx: FxRateCache) -> Optional[tuple[str, str]]:

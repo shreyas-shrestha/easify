@@ -5,10 +5,17 @@ from __future__ import annotations
 import platform
 import re
 import subprocess
+import threading
+import time
 
 from app.utils.log import get_logger
 
 LOG = get_logger(__name__)
+
+_focus_lock = threading.Lock()
+_focus_cache_at: float = 0.0
+_focus_cache_val: str = ""
+_FOCUS_TTL_SEC = 0.5
 
 
 def _run_cmd(args: list[str], timeout: float = 0.35) -> str:
@@ -70,16 +77,27 @@ def _linux_frontmost() -> str:
     return "unknown"
 
 
-def get_focused_app_name() -> str:
-    """Short label for LLM context; never raises."""
+def get_focused_app_name(ttl_sec: float = _FOCUS_TTL_SEC) -> str:
+    """Short label for LLM context; never raises. Cached briefly to avoid slow AppleScript."""
+    global _focus_cache_at, _focus_cache_val
+    now = time.monotonic()
+    with _focus_lock:
+        if _focus_cache_val and (now - _focus_cache_at) < max(0.0, ttl_sec):
+            return _focus_cache_val
     try:
         s = platform.system()
         if s == "Darwin":
-            return _macos_frontmost()
-        if s == "Windows":
-            return _windows_frontmost()
-        if s == "Linux":
-            return _linux_frontmost()
+            label = _macos_frontmost()
+        elif s == "Windows":
+            label = _windows_frontmost()
+        elif s == "Linux":
+            label = _linux_frontmost()
+        else:
+            label = "unknown"
     except Exception as e:
         LOG.debug("focus detection: %s", e)
-    return "unknown"
+        label = "unknown"
+    with _focus_lock:
+        _focus_cache_at = time.monotonic()
+        _focus_cache_val = label or "unknown"
+    return _focus_cache_val

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 from typing import TYPE_CHECKING, Optional
 
 from app.snippets.engine import SnippetEngine, SnippetHit
@@ -14,7 +15,11 @@ LOG = get_logger(__name__)
 
 
 class SnippetSemanticIndex:
-    """Lazy-built key embeddings; skipped if sentence-transformers unavailable."""
+    """Lazy-built key embeddings; skipped if sentence-transformers unavailable.
+
+    Call :meth:`prepare_sync` from a worker thread (e.g. ``asyncio.to_thread``) before
+    :meth:`find_best` so model load / encode never blocks the asyncio event loop.
+    """
 
     def __init__(self, snippets: SnippetEngine, settings: "Settings") -> None:
         self._snippets = snippets
@@ -25,6 +30,7 @@ class SnippetSemanticIndex:
         self._keys: list[str] = []
         self._emb = None
         self._mtime = -1.0
+        self._lock = threading.Lock()
 
     def _try_import(self):  # noqa: ANN201
         try:
@@ -38,10 +44,10 @@ class SnippetSemanticIndex:
             )
             return None
 
-    def _rebuild(self) -> None:
+    def _rebuild_locked(self) -> None:
         ST = self._try_import()
-        self._snippets.maybe_reload()
-        self._mtime = float(self._snippets.content_version)
+        ver = float(self._snippets.content_version)
+        self._mtime = ver
         if ST is None:
             self._keys = []
             self._emb = None
@@ -61,29 +67,36 @@ class SnippetSemanticIndex:
     def _display_key(k: str) -> str:
         return k.replace(":", " ")
 
-    def _sync(self) -> None:
-        self._snippets.maybe_reload()
-        if float(self._snippets.content_version) != self._mtime or self._emb is None:
-            self._rebuild()
+    def prepare_sync(self) -> None:
+        """Refresh embeddings if snippet files changed. CPU/disk heavy — run off the event loop."""
+        with self._lock:
+            self._snippets.maybe_reload()
+            ver = float(self._snippets.content_version)
+            if ver == self._mtime and self._emb is not None:
+                return
+            self._rebuild_locked()
 
     def find_best(self, query: str, focused_app: str) -> Optional[SnippetHit]:
+        """Use embeddings prepared by :meth:`prepare_sync`; never loads the model here."""
         q = (query or "").strip()
         if not q:
             return None
-        self._sync()
-        if self._emb is None or not self._keys:
+        with self._lock:
+            emb = self._emb
+            keys = list(self._keys)
+            model = self._model
+        if emb is None or not keys or model is None:
             return None
         import numpy as np  # type: ignore[import-untyped]
 
-        assert self._model is not None
-        qv = self._model.encode([q], convert_to_numpy=True, show_progress_bar=False)[0]
+        qv = model.encode([q], convert_to_numpy=True, show_progress_bar=False)[0]
         qn = np.linalg.norm(qv) or 1.0
         best_i = -1
         best_s = -1.0
-        for i, key in enumerate(self._keys):
+        for i, key in enumerate(keys):
             if not self._snippets.key_visible_for_focus(key, focused_app, lenient=self._namespace_lenient):
                 continue
-            row = self._emb[i]
+            row = emb[i]
             rn = float(np.linalg.norm(row)) or 1.0
             sim = float(np.dot(qv, row) / (qn * rn))
             if sim > best_s:
@@ -91,7 +104,7 @@ class SnippetSemanticIndex:
                 best_i = i
         if best_i < 0 or best_s < self._min_sim:
             return None
-        key = self._keys[best_i]
+        key = keys[best_i]
         val = self._snippets.get_value(key)
         if val is None:
             return None

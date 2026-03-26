@@ -5,6 +5,9 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from app.engine.service import ExpansionJob
+from app.utils.log import get_logger
+
+LOG = get_logger(__name__)
 
 if TYPE_CHECKING:
     from app.config.settings import Settings
@@ -20,7 +23,11 @@ def open_expansion_palette(
     import tkinter as tk
 
     _ = settings  # reserved for future (preview, model label)
-    root = tk.Tk()
+    try:
+        root = tk.Tk()
+    except tk.TclError as e:
+        LOG.warning("no display for palette (%s)", e)
+        return
     root.withdraw()
     win = tk.Toplevel(root)
     win.title("Easify — expansion")

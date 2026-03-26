@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import secrets
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -14,7 +15,7 @@ from app.utils.log import get_logger
 
 LOG = get_logger(__name__)
 
-_INDEX_HTML = """<!DOCTYPE html>
+_INDEX_HTML_TEMPLATE = """<!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8"/><title>Easify snippets</title>
 <style>
 body{font-family:system-ui,sans-serif;max-width:720px;margin:24px auto;padding:0 16px;}
@@ -24,7 +25,7 @@ button{padding:8px 14px;cursor:pointer}
 .muted{color:#666;font-size:0.9em}
 </style></head><body>
 <h1>Easify snippets</h1>
-<p class="muted">Editing <code id="path"></code> — bind <code>127.0.0.1</code> only.</p>
+<p class="muted">Editing <code id="path"></code> — localhost only. POST/DELETE require <code>X-Easify-Token</code> (see server log). Changes apply on the next snippet lookup (mtime reload).</p>
 <div class="row"><h2>Add / update</h2>
 <label>Key <input id="k" placeholder="thanks or slack:thanks"/></label>
 <label>Value <textarea id="v" rows="4" placeholder="Expanded text"></textarea></label>
@@ -32,10 +33,13 @@ button{padding:8px 14px;cursor:pointer}
 <h2>Entries</h2>
 <div id="list">Loading…</div>
 <script>
+const TOKEN=__EASIFY_TOKEN_JSON__;
 const pathEl=document.getElementById('path');
 const listEl=document.getElementById('list');
+const tokHeaders={'X-Easify-Token':TOKEN};
 async function load(){
-  const r=await fetch('/api/snippets');
+  const r=await fetch('/api/snippets',{headers:tokHeaders});
+  if(!r.ok){listEl.textContent='Error: '+r.status+' '+await r.text();return;}
   const j=await r.json();
   pathEl.textContent=j.path||'';
   const s=j.snippets||{};
@@ -49,7 +53,7 @@ async function load(){
   h+='</table>';listEl.innerHTML=h;
   listEl.querySelectorAll('button[data-k]').forEach(b=>b.onclick=async()=>{
     if(!confirm('Delete '+decodeURIComponent(b.dataset.k)+'?'))return;
-    await fetch('/api/snippets?key='+encodeURIComponent(decodeURIComponent(b.dataset.k)),{method:'DELETE'});
+    await fetch('/api/snippets?key='+encodeURIComponent(decodeURIComponent(b.dataset.k)),{method:'DELETE',headers:tokHeaders});
     load();
   });
 }
@@ -57,7 +61,7 @@ document.getElementById('save').onclick=async()=>{
   const k=document.getElementById('k').value.trim().toLowerCase();
   const v=document.getElementById('v').value;
   if(!k){alert('Key required');return;}
-  const r=await fetch('/api/snippets',{method:'POST',headers:{'Content-Type':'application/json'},
+  const r=await fetch('/api/snippets',{method:'POST',headers:{'Content-Type':'application/json',...tokHeaders},
     body:JSON.stringify({key:k,value:v})});
   if(!r.ok){alert(await r.text());return;}
   document.getElementById('k').value='';document.getElementById('v').value='';
@@ -103,6 +107,14 @@ def run_snippet_ui(settings: Settings) -> None:
     host = settings.ui_host
     port = settings.ui_port
     user_path = path
+    secret = settings.ui_secret_token.strip() or secrets.token_urlsafe(24)
+    if not settings.ui_secret_token.strip():
+        LOG.warning(
+            "EASIFY_UI_SECRET_TOKEN unset — generated ephemeral token (set env to pin). "
+            "Use the same value in X-Easify-Token for API calls."
+        )
+    token_json = json.dumps(secret)
+    index_html = _INDEX_HTML_TEMPLATE.replace("__EASIFY_TOKEN_JSON__", token_json)
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, fmt: str, *args: Any) -> None:
@@ -115,13 +127,19 @@ def run_snippet_ui(settings: Settings) -> None:
             self.end_headers()
             self.wfile.write(body)
 
+        def _api_token_ok(self) -> bool:
+            return self.headers.get("X-Easify-Token") == secret
+
         def do_GET(self) -> None:  # noqa: N802
             parsed = urlparse(self.path or "/")
             if parsed.path in ("/", "/index.html"):
-                b = _INDEX_HTML.encode("utf-8")
+                b = index_html.encode("utf-8")
                 self._send(HTTPStatus.OK, b, "text/html; charset=utf-8")
                 return
             if parsed.path == "/api/snippets":
+                if not self._api_token_ok():
+                    self._send(HTTPStatus.FORBIDDEN, b"forbidden", "text/plain; charset=utf-8")
+                    return
                 inner = _load_inner(user_path)
                 payload = json.dumps({"path": str(user_path), "snippets": inner}, ensure_ascii=False).encode(
                     "utf-8"
@@ -134,6 +152,9 @@ def run_snippet_ui(settings: Settings) -> None:
             parsed = urlparse(self.path or "/")
             if parsed.path != "/api/snippets":
                 self._send(HTTPStatus.NOT_FOUND, b"not found", "text/plain; charset=utf-8")
+                return
+            if not self._api_token_ok():
+                self._send(HTTPStatus.FORBIDDEN, b"forbidden", "text/plain; charset=utf-8")
                 return
             n = int(self.headers.get("Content-Length", "0") or 0)
             raw = self.rfile.read(n) if n > 0 else b"{}"
@@ -168,6 +189,9 @@ def run_snippet_ui(settings: Settings) -> None:
             if parsed.path != "/api/snippets":
                 self._send(HTTPStatus.NOT_FOUND, b"not found", "text/plain; charset=utf-8")
                 return
+            if not self._api_token_ok():
+                self._send(HTTPStatus.FORBIDDEN, b"forbidden", "text/plain; charset=utf-8")
+                return
             qs = parse_qs(parsed.query or "")
             keys = qs.get("key", [])
             if not keys or not keys[0].strip():
@@ -187,7 +211,7 @@ def run_snippet_ui(settings: Settings) -> None:
             self._send(HTTPStatus.OK, b"ok", "text/plain; charset=utf-8")
 
     server = ThreadingHTTPServer((host, port), Handler)
-    LOG.info("snippet UI at http://%s:%s/ — Ctrl+C to stop", host, port)
+    LOG.info("snippet UI http://%s:%s/ — X-Easify-Token: %s", host, port, secret)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

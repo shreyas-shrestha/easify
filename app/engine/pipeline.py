@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Callable, Optional
@@ -167,6 +168,9 @@ class ExpansionPipeline:
             if self._verbose:
                 LOG.info("%s (%s ms)", layer, round(ms, 2))
             return ExpansionOutcome(text, layer, ms)
+
+        if self.semantic_index is not None:
+            await asyncio.to_thread(self.semantic_index.prepare_sync)
 
         det, _ = self.try_deterministic_capture(
             capture,

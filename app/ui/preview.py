@@ -17,7 +17,11 @@ def confirm_expansion(text: str, title: str = "Easify — preview") -> bool:
         return True
 
     result = {"ok": False}
-    root = tk.Tk()
+    try:
+        root = tk.Tk()
+    except tk.TclError as e:
+        LOG.warning("no display for tkinter preview (%s) — skipping preview", e)
+        return True
     root.withdraw()
     win = tk.Toplevel(root)
     win.title(title)

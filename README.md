@@ -61,7 +61,10 @@ Cache keys for **contextual** L3 rows include the augmented system string (app +
 | **Semantic snippet match** | `EASIFY_SEMANTIC_SNIPPETS=1` — embedding similarity on keys after fuzzy miss; `pip install easify[semantic]` (or `sentence-transformers`). `EASIFY_SEMANTIC_MODEL`, `EASIFY_SEMANTIC_MIN_SIMILARITY` (default `0.35`) |
 | **Per-app snippet keys** | Keys `namespace:rest` (e.g. `slack:thanks`) only resolve when the **focused app** name contains `namespace`, unless `EASIFY_SNIPPET_NAMESPACE_LENIENT=1` (show all when focus is unknown) |
 | **Cache → snippet promotion** | `EASIFY_CACHE_PROMOTE_MIN_HITS=N` (default `0` = off): after each cache hit, if `hit_count ≥ N` and source is in `EASIFY_CACHE_PROMOTE_SOURCES` (default `ai,bg`), append `promoted-<slug>` to `~/.config/easify/snippets.json` (deduped) |
-| **Snippet web UI** | `easify ui` — `http://127.0.0.1:8765/` by default (`EASIFY_UI_HOST`, `EASIFY_UI_PORT`) |
+| **Snippet web UI** | `easify ui` — `http://127.0.0.1:8765/` by default (`EASIFY_UI_HOST`, `EASIFY_UI_PORT`). **All** `/api/snippets` requests require header `X-Easify-Token` (set `EASIFY_UI_SECRET_TOKEN` or copy the token from the log line on startup) to reduce drive‑by CSRF from other browser tabs. |
+| **Promotion cap** | `EASIFY_CACHE_PROMOTE_MAX_KEYS` (default `500`, `0` = unlimited) stops unbounded `promoted-*` growth |
+| **Double-space timing** | `EASIFY_DOUBLE_SPACE_SETTLE_MS` (default `20`): brief pause after deleting the two spaces before capture mode so focused apps can process backspaces (pynput race mitigation) |
+| **Live enrich** | Ultra-common words are skipped via `app/bundled/live_enrich_blocklist.txt` (no config knob) |
 | **Undo last expansion** | `EASIFY_UNDO_HOTKEY='<ctrl>+<shift>+z>'` — removes the injected text and restores the captured trigger + intent when possible; palette expansions (`delete_count=0`) delete only the injected text |
 
 ## Repository layout

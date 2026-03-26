@@ -7,7 +7,7 @@ import json
 import re
 import threading
 from pathlib import Path
-from typing import Set
+from typing import Any, Set
 
 from app.utils.log import get_logger
 
@@ -57,6 +57,14 @@ def _remember_promoted(path: Path, token: str) -> None:
         LOG.debug("promote dedupe write: %s", e)
 
 
+def count_promoted_snippets(inner: dict[Any, Any]) -> int:
+    return sum(
+        1
+        for k in inner
+        if isinstance(k, str) and k.strip().lower().startswith("promoted-")
+    )
+
+
 def append_snippet_to_user_file(user_snippets: Path, key: str, value: str) -> bool:
     """Merge key into JSON file. Returns True if a new key was written."""
     user_snippets.parent.mkdir(parents=True, exist_ok=True)
@@ -99,6 +107,7 @@ def maybe_promote_cache_hit(
     source: str,
     min_hits: int,
     allowed_sources: frozenset[str],
+    max_promoted_keys: int = 0,
 ) -> bool:
     if min_hits <= 0 or hit_count < min_hits:
         return False
@@ -110,6 +119,27 @@ def maybe_promote_cache_hit(
     token = hashlib.sha256(f"{key}\x00{cache_prompt}\x00{response}".encode("utf-8")).hexdigest()
     dedupe = _dedupe_path(config_dir)
     with _PROMOTE_LOCK:
+        if max_promoted_keys > 0:
+            raw_obj: object
+            if user_snippets.is_file():
+                try:
+                    raw_obj = json.loads(user_snippets.read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError):
+                    raw_obj = {}
+            else:
+                raw_obj = {}
+            if isinstance(raw_obj, dict) and "snippets" in raw_obj:
+                inner_prev = raw_obj["snippets"]
+            elif isinstance(raw_obj, dict):
+                inner_prev = raw_obj
+            else:
+                inner_prev = {}
+            if isinstance(inner_prev, dict) and count_promoted_snippets(inner_prev) >= max_promoted_keys:
+                LOG.warning(
+                    "cache promotion skipped: promoted snippet cap reached (%s)",
+                    max_promoted_keys,
+                )
+                return False
         seen = _load_promoted_set(dedupe)
         if token in seen:
             return False

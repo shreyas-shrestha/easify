@@ -58,6 +58,7 @@ def run_tray_app(service: "ExpansionService", stop: threading.Event, on_quit: Ca
 
     def poll() -> None:
         last_state = ""
+        last_title = ""
         while not stop.is_set():
             st, _, _ = service.tray_snapshot()
             if st != last_state:
@@ -66,10 +67,13 @@ def run_tray_app(service: "ExpansionService", stop: threading.Event, on_quit: Ca
                     icon.icon = _icon_image(st)
                 except Exception:
                     pass
-            try:
-                icon.title = snapshot_title()
-            except Exception:
-                pass
+            title = snapshot_title()
+            if title != last_title:
+                last_title = title
+                try:
+                    icon.title = title
+                except Exception:
+                    pass
             time.sleep(0.4)
         try:
             icon.stop()

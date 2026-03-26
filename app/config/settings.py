@@ -140,6 +140,13 @@ class Settings:
     undo_hotkey: str = field(default_factory=lambda: _env("UNDO_HOTKEY", "").strip())
     ui_host: str = field(default_factory=lambda: _env("UI_HOST", "127.0.0.1").strip() or "127.0.0.1")
     ui_port: int = field(default_factory=lambda: max(1, min(65535, int(_env("UI_PORT", "8765")))))
+    ui_secret_token: str = field(default_factory=lambda: _env("UI_SECRET_TOKEN", "").strip())
+    cache_promote_max_keys: int = field(
+        default_factory=lambda: max(0, min(100_000, int(_env("CACHE_PROMOTE_MAX_KEYS", "500"))))
+    )
+    double_space_settle_ms: int = field(
+        default_factory=lambda: max(0, min(500, int(_env("DOUBLE_SPACE_SETTLE_MS", "20"))))
+    )
 
     ollama_timeout_s: float = field(default_factory=lambda: float(_env("OLLAMA_TIMEOUT", "120")))
     ollama_retries: int = field(default_factory=lambda: int(_env("RETRIES", "2")))
