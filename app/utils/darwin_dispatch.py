@@ -48,12 +48,19 @@ def run_on_darwin_main_thread(work: Callable[[], None]) -> None:
         _dispatch_trampoline = CFUNCTYPE(None, c_void_p)(_trampoline)
     try:
         lib = ctypes.CDLL("/usr/lib/system/libdispatch.dylib")
-        lib.dispatch_get_main_queue.restype = c_void_p
-        lib.dispatch_get_main_queue.argtypes = []
         lib.dispatch_async_f.argtypes = [c_void_p, c_void_p, CFUNCTYPE(None, c_void_p)]
         lib.dispatch_async_f.restype = None
-        mq = lib.dispatch_get_main_queue()
-        lib.dispatch_async_f(mq, None, _dispatch_trampoline)
+        # Newer macOS builds may not export dispatch_get_main_queue via dlsym.
+        # _dispatch_main_q is the underlying queue object and is exported.
+        try:
+            mq = c_void_p.in_dll(lib, "_dispatch_main_q").value
+        except Exception:
+            lib.dispatch_get_main_queue.restype = c_void_p
+            lib.dispatch_get_main_queue.argtypes = []
+            mq = lib.dispatch_get_main_queue()
+        if not mq:
+            raise RuntimeError("main dispatch queue unavailable")
+        lib.dispatch_async_f(c_void_p(mq), None, _dispatch_trampoline)
     except Exception as e:
         with _jobs_lock:
             if _jobs and _jobs[-1] is pending:
