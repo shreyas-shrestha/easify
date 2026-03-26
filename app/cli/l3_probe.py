@@ -101,13 +101,24 @@ def probe_l3_backend(settings: Settings, *, httpx_timeout: float) -> L3ProbeOutc
     return out
 
 
-def startup_hint_messages(settings: Settings) -> List[str]:
-    """Log-friendly strings for `easify run`. Uses ``settings.startup_health_timeout_s`` (seconds)."""
-    t = max(0.5, min(60.0, float(settings.startup_health_timeout_s)))
-    outcome = probe_l3_backend(settings, httpx_timeout=t)
+def format_startup_hints(issues: List[L3BackendIssue]) -> List[str]:
+    """Turn probe issues into log lines."""
     return [
         f"{issue.message} Run `easify doctor`."
         if issue.level == "fail"
         else f"{issue.message} (see `easify doctor`.)"
-        for issue in outcome.issues
+        for issue in issues
     ]
+
+
+def startup_probe_for_run(settings: Settings) -> tuple[L3ProbeOutcome, List[str]]:
+    """Single HTTP probe + hint strings for startup (avoid duplicate /api/tags)."""
+    t = max(0.5, min(60.0, float(settings.startup_health_timeout_s)))
+    outcome = probe_l3_backend(settings, httpx_timeout=t)
+    return outcome, format_startup_hints(outcome.issues)
+
+
+def startup_hint_messages(settings: Settings) -> List[str]:
+    """Log-friendly strings for `easify run` (performs one probe)."""
+    _, hints = startup_probe_for_run(settings)
+    return hints

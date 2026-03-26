@@ -71,7 +71,7 @@ Cache keys for **contextual** L3 rows include the augmented system string (app +
 
 | Command | Purpose |
 |---------|---------|
-| `easify doctor` | Prints **ok** / **warn** / **FAIL** for config paths, cache writability, and your AI backend (Ollama `GET /api/tags`, or API keys for OpenAI/Anthropic). Use `--strict` to exit with an error if anything warns. |
+| `easify doctor` | Prints **ok** / **warn** / **FAIL** for config paths, cache writability, and your AI backend. **`--json`** prints a full report + **`exit_code`** for CI/scripts. **`--strict`** exits with an error if anything warns. |
 | **Startup L3 hints** | On `easify run`, a quick HTTP probe logs **warnings** if L3 is misconfigured. `EASIFY_STARTUP_HEALTH=0` disables it; `EASIFY_STARTUP_HEALTH_TIMEOUT` sets the timeout in seconds (default `3`, max `60`). `easify doctor` uses the same probe logic as startup (via `app/cli/l3_probe.py`). |
 | `easify autostart install` | **macOS:** `~/Library/LaunchAgents/com.easify.app.plist` + `launchctl bootstrap`. **Linux:** `~/.config/systemd/user/easify.service` + `systemctl --user enable --now`. **Windows:** Startup folder `easify_autostart.bat`. Uses `easify` on `PATH`, else `python -m app`. |
 | `easify autostart remove` | Unloads/removes the above. |

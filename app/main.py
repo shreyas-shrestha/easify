@@ -40,6 +40,12 @@ def main() -> None:
     sub.add_parser("ui", help="Local web UI for user snippets (localhost)")
     p_doc = sub.add_parser("doctor", help="Check paths, optional deps, and AI backend reachability")
     p_doc.add_argument("--strict", action="store_true", help="Exit with error if any warnings")
+    p_doc.add_argument(
+        "--json",
+        action="store_true",
+        dest="doctor_json",
+        help="Print machine-readable JSON (includes exit_code) for CI/scripts",
+    )
     p_as = sub.add_parser("autostart", help="Install or remove login startup (macOS/Linux/Windows)")
     as_sub = p_as.add_subparsers(dest="autostart_cmd")
     as_sub.add_parser("install", help="Start Easify when you log in")
@@ -57,7 +63,7 @@ def main() -> None:
     if args.command == "doctor":
         from app.cli.doctor import run_doctor
 
-        sys.exit(run_doctor(Settings.load(), strict=args.strict))
+        sys.exit(run_doctor(Settings.load(), strict=args.strict, json_format=args.doctor_json))
     if args.command == "autostart":
         from app.cli import autostart as autostart_mod
 
@@ -92,9 +98,19 @@ def main() -> None:
         service.prewarm_cache()
 
     if settings.startup_health_check:
-        from app.cli.health import startup_l3_hints
+        from app.cli.l3_probe import startup_probe_for_run
 
-        for hint in startup_l3_hints(settings):
+        probe_out, hints = startup_probe_for_run(settings)
+        n_fail = sum(1 for i in probe_out.issues if i.level == "fail")
+        n_warn = sum(1 for i in probe_out.issues if i.level == "warn")
+        LOG.info(
+            "L3 readiness probe provider=%s fails=%s warns=%s ollama_reachable=%s",
+            (settings.ai_provider or "ollama").strip().lower(),
+            n_fail,
+            n_warn,
+            probe_out.ollama_reachable,
+        )
+        for hint in hints:
             LOG.warning("%s", hint)
 
     LOG.info(
