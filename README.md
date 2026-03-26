@@ -1,6 +1,6 @@
 # Easify
 
-**Easify turns short phrases you type into full text**—definitions, fixes, conversions, snippets, and answers—using your keyboard everywhere you write. It tries **fast local shortcuts first**, then **cached AI answers**, and only then talks to an **LLM** (typically **Ollama** on your machine) so normal typing stays snappy.
+**Easify is a way to supercharge your writing. Turn short phrases you type into full text, definitions, fixes, unit conversions, snippets, question answers all embedded into your keyboard everywhere you write. 
 
 ---
 
