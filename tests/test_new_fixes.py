@@ -375,8 +375,8 @@ def test_pre_inject_refocus_only_for_l3_layer(monkeypatch: pytest.MonkeyPatch) -
     def fake_refocus(*, captured_app: str, cmd_timeout: float = 1.25) -> None:
         calls.append(captured_app)
 
-    monkeypatch.setattr("app.engine.service.inject_focus_safe_for_keys", lambda **k: (True, ""))
-    monkeypatch.setattr("app.engine.service.refocus_if_needed_for_inject", fake_refocus)
+    monkeypatch.setattr("app.service.expansion_service.inject_focus_safe_for_keys", lambda **k: (True, ""))
+    monkeypatch.setattr("app.service.expansion_service.refocus_if_needed_for_inject", fake_refocus)
 
     svc = ExpansionService(Settings.load())
     svc.set_inject(lambda n: None, lambda t: None, type_fn=lambda s: None, cursor_left_fn=lambda n: None)
@@ -718,7 +718,7 @@ def test_apply_replacement_aborts_on_focus_mismatch(monkeypatch: pytest.MonkeyPa
     def bad_focus(**_k: object) -> tuple[bool, str]:
         return False, "focus mismatch"
 
-    monkeypatch.setattr("app.engine.service.inject_focus_safe_for_keys", bad_focus)
+    monkeypatch.setattr("app.service.expansion_service.inject_focus_safe_for_keys", bad_focus)
     svc = ExpansionService(Settings.load())
     deleted: list[int] = []
     svc.set_inject(lambda n: deleted.append(n), lambda t: None, type_fn=lambda s: None)

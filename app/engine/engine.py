@@ -32,6 +32,6 @@ class EasifyEngine:
         if mode is ExecutionMode.LIVE_SYNC:
             return self._router.handle_live_sync(event, policy)
         if mode is ExecutionMode.CAPTURE_ASYNC:
-            self._router.handle_capture_async(event)
+            self._router.handle_capture_async(event, policy)
             return True
         return False

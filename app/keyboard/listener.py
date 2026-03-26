@@ -283,37 +283,24 @@ class KeyboardListener:
     def _submit_capture(self, *, entered_with_newline: bool) -> None:
         raw_buf = self._capture.text()
         close = self.settings.capture_close.strip()
-        had_close_suffix = bool(close and raw_buf.endswith(close))
-        raw = raw_buf[: -len(close)] if had_close_suffix else raw_buf
-        run_prompt = raw.strip()
         from_prefix = self._capture_from_prefix
         self._state = _STATE_IDLE
         self._capture.clear()
         self._trigger.reset()
         self._capture_from_prefix = False
-        if not run_prompt:
+        meta = input_buffer.compute_capture_submit_metadata(
+            raw_buf=raw_buf,
+            close=close,
+            from_prefix=from_prefix,
+            use_prefix_trigger=self.settings.use_prefix_trigger,
+            trigger=self.trigger,
+            enter_backspaces=self.enter_backspaces,
+            entered_with_newline=entered_with_newline,
+        )
+        if meta is None:
             LOG.warning("empty intent — type between delimiters or press Enter")
             return
-        if from_prefix and self.settings.use_prefix_trigger and self.trigger:
-            if close and not entered_with_newline:
-                dc = len(self.trigger) + len(raw) + len(close)
-                undo = f"{self.trigger}{raw}{close}"
-            elif close and entered_with_newline and had_close_suffix:
-                dc = len(self.trigger) + len(raw) + len(close) + max(0, self.enter_backspaces)
-                undo = f"{self.trigger}{raw}{close}"
-            else:
-                dc = len(self.trigger) + len(raw) + max(0, self.enter_backspaces)
-                undo = f"{self.trigger}{raw}"
-        else:
-            if close and not entered_with_newline:
-                dc = len(raw) + len(close)
-                undo = f"{raw}{close}"
-            elif close and entered_with_newline and had_close_suffix:
-                dc = len(raw) + len(close) + max(0, self.enter_backspaces)
-                undo = f"{raw}{close}"
-            else:
-                dc = len(raw) + max(0, self.enter_backspaces)
-                undo = raw
+        run_prompt, dc, undo = meta
         if self.debug:
             LOG.debug("submit %r", run_prompt)
         focused = (

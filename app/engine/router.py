@@ -90,7 +90,7 @@ class EngineRouter:
             self._schedule_enrich_word(raw)
         return False
 
-    def handle_capture_async(self, event: EngineEvent) -> None:
+    def handle_capture_async(self, event: EngineEvent, policy: BehaviorPolicy) -> None:
         if event.type is not EngineEventType.CAPTURE_SUBMIT:
             return
         payload = event.payload
@@ -103,5 +103,6 @@ class EngineRouter:
                 prior_words=payload.prior_words,
                 undo_restore=payload.undo_restore,
                 focused_app_at_submit=payload.focused_app_at_submit,
+                citation_mode=policy.capture.citations,
             )
         )

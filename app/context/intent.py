@@ -11,7 +11,7 @@ def classify_intent_from_text(text: str) -> IntentKind:
     t = (text or "").strip().lower()
     if not t:
         return IntentKind.UNKNOWN
-    if re.search(r"\b(cite|sources|references|bibliography)\b", t):
+    if re.search(r"\b(cite|citations|sources|references|bibliography)\b", t):
         return IntentKind.NOTE
     if "?" in t or re.search(r"\b(what|who|when|where|why|how)\b", t):
         return IntentKind.QUESTION

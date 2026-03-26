@@ -11,6 +11,7 @@ import httpx
 from app.ai import prompts
 from app.ai.chat_provider import ChatProvider
 from app.autocorrect.engine import AutocorrectEngine
+from app.cache.keying import capture_cache_row_key
 from app.cache.service import CacheService
 from app.engine.expansion_contracts import CacheTouchHandler, ExpansionLayer, ExpansionOutcome, l3_layer
 from app.engine.l0_compute import FxRateCache, try_l0_async
@@ -23,10 +24,6 @@ if TYPE_CHECKING:
     from app.snippets.semantic_index import SnippetSemanticIndex
 
 LOG = get_logger(__name__)
-
-
-def _cache_prompt(model: str, normalized_prompt: str, system: str) -> str:
-    return f"{model}\n{system}\n{normalized_prompt}"
 
 
 class ExpansionPipeline:
@@ -153,7 +150,7 @@ class ExpansionPipeline:
         stage_ms: dict[str, float],
     ) -> Optional[ExpansionOutcome]:
         user_prompt, system = prompts.classify(corrected)
-        ck = _cache_prompt(self.llm.cache_model_id, user_prompt, system)
+        ck = capture_cache_row_key(self.llm.cache_model_id, user_prompt, system)
         t = time.perf_counter()
         cached, hit_count, src = self.cache.lookup_capture(self.llm.cache_model_id, ck)
         stage_ms["cache"] = (time.perf_counter() - t) * 1000.0
@@ -225,7 +222,7 @@ class ExpansionPipeline:
             prior_words=prior_words,
             clipboard_snippet=clipboard_snippet,
         )
-        ck = _cache_prompt(self.llm.cache_model_id, user_prompt, system_full)
+        ck = capture_cache_row_key(self.llm.cache_model_id, user_prompt, system_full)
         cached, hit_count, src = self.cache.lookup_capture(self.llm.cache_model_id, ck)
         if not cached:
             return None
@@ -252,7 +249,7 @@ class ExpansionPipeline:
             prior_words=prior_words,
             clipboard_snippet=clipboard_snippet,
         )
-        ck = _cache_prompt(self.llm.cache_model_id, user_prompt, system_full)
+        ck = capture_cache_row_key(self.llm.cache_model_id, user_prompt, system_full)
         mid = self.llm.cache_model_id
         LOG.info("L3 %s generate model=%s", self.llm.name, mid)
         t_ai = time.perf_counter()

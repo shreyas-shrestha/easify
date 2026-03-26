@@ -18,6 +18,31 @@ from app.pipelines.capture_pipeline import capture_result_from_outcome, run_capt
 from app.snippets.engine import SnippetEngine
 
 
+def test_compute_capture_submit_metadata():
+    m = input_buffer.compute_capture_submit_metadata(
+        raw_buf="hello//",
+        close="//",
+        from_prefix=True,
+        use_prefix_trigger=True,
+        trigger="//",
+        enter_backspaces=1,
+        entered_with_newline=False,
+    )
+    assert m is not None
+    run_prompt, dc, undo = m
+    assert run_prompt == "hello"
+    assert "//" in undo
+    assert input_buffer.compute_capture_submit_metadata(
+        raw_buf="  ",
+        close="",
+        from_prefix=False,
+        use_prefix_trigger=False,
+        trigger="",
+        enter_backspaces=0,
+        entered_with_newline=True,
+    ) is None
+
+
 def test_buffer_capture_submit_event():
     ev = input_buffer.capture_submit(
         capture_text="hello",

@@ -23,6 +23,8 @@ class ExpansionJob:
     undo_restore: str = ""
     # macOS process name from System Events when capture was submitted (inject refocus).
     focused_app_at_submit: str = ""
+    # Derived from policy at submit time (e.g. note-taking intent → citations in CaptureResult).
+    citation_mode: bool = False
 
 
 @dataclass

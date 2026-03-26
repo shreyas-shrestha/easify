@@ -92,6 +92,41 @@ def test_settings_preset_minimal(monkeypatch: pytest.MonkeyPatch) -> None:
     assert s.live_cache_enrich is False
 
 
+def test_router_capture_async_sets_citation_from_policy():
+    from unittest.mock import MagicMock
+
+    from app.config.settings import Settings
+    from app.context.detector import detect_input_context
+    from app.engine.events import CaptureSubmitPayload, EngineEvent, EngineEventType
+    from app.engine.router import EngineRouter
+    from app.policy.engine import resolve_policy
+
+    settings = Settings.load()
+    payload = CaptureSubmitPayload(
+        capture_text="please add sources for this paragraph",
+        delete_count=10,
+        undo_restore="//x//",
+        prior_words="",
+        focused_app_at_submit="",
+    )
+    ev = EngineEvent(EngineEventType.CAPTURE_SUBMIT, payload)
+    ctx = detect_input_context(ev, focused_app_raw="Notes")
+    policy = resolve_policy(ctx, settings)
+    assert policy.capture.citations is True
+    svc = MagicMock()
+    r = EngineRouter(
+        service=svc,
+        build_live_deps=lambda _p: MagicMock(),
+        on_live_replace=lambda _o, _n: None,
+        schedule_enrich_word=lambda _w: None,
+        schedule_enrich_phrase=lambda _p: None,
+        min_word_len_for_enrich=3,
+    )
+    r.handle_capture_async(ev, policy)
+    job = svc.submit.call_args[0][0]
+    assert job.citation_mode is True
+
+
 def test_cache_service_facade(tmp_path) -> None:
     from app.cache.service import CacheService
     from app.cache.store import SqliteExpansionCache
