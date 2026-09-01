@@ -44,23 +44,25 @@ def run_on_darwin_main_thread(work: Callable[[], None]) -> None:
     with _jobs_lock:
         _jobs.append(work)
         pending = work
-    if _dispatch_trampoline is None:
-        _dispatch_trampoline = CFUNCTYPE(None, c_void_p)(_trampoline)
+        if _dispatch_trampoline is None:
+            _dispatch_trampoline = CFUNCTYPE(None, c_void_p)(_trampoline)
+        trampoline = _dispatch_trampoline
     try:
         lib = ctypes.CDLL("/usr/lib/system/libdispatch.dylib")
         lib.dispatch_async_f.argtypes = [c_void_p, c_void_p, CFUNCTYPE(None, c_void_p)]
         lib.dispatch_async_f.restype = None
-        # Newer macOS builds may not export dispatch_get_main_queue via dlsym.
-        # _dispatch_main_q is the underlying queue object and is exported.
+        # dispatch_get_main_queue() is an inline that expands to &_dispatch_main_q, so it is
+        # not exported via dlsym. _dispatch_main_q is the queue *struct* itself — take its
+        # address; reading its contents would hand libdispatch the isa pointer and crash.
         try:
-            mq = c_void_p.in_dll(lib, "_dispatch_main_q").value
+            mq = ctypes.addressof(c_void_p.in_dll(lib, "_dispatch_main_q"))
         except Exception:
             lib.dispatch_get_main_queue.restype = c_void_p
             lib.dispatch_get_main_queue.argtypes = []
             mq = lib.dispatch_get_main_queue()
         if not mq:
             raise RuntimeError("main dispatch queue unavailable")
-        lib.dispatch_async_f(c_void_p(mq), None, _dispatch_trampoline)
+        lib.dispatch_async_f(c_void_p(mq), None, trampoline)
     except Exception as e:
         with _jobs_lock:
             if _jobs and _jobs[-1] is pending:
