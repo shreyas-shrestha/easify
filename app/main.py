@@ -92,6 +92,13 @@ def main() -> None:
     if settings.use_prefix_trigger and not settings.trigger.strip():
         LOG.error("EASIFY_TRIGGER is required when prefix activation is enabled")
         sys.exit(2)
+    if platform.system() == "Darwin" and settings.backend.strip().lower() in ("", "pynput"):
+        from app.utils.darwin_permissions import preflight_input_monitoring
+
+        preflight = preflight_input_monitoring()
+        if not preflight.ok:
+            LOG.error("%s", preflight.message)
+            sys.exit(2)
 
     service = ExpansionService(settings)
     if platform.system() == "Darwin":
