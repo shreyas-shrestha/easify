@@ -117,11 +117,32 @@ def apply_toml_to_settings(obj: Any, data: Mapping[str, Any]) -> None:
     take_str("ollama_url", "OLLAMA_URL", key="ollama_url")
     take_str("ollama_model", "EASIFY_MODEL", "OLLAMA_MODEL", key="model")
     take_str("ai_provider", "EASIFY_AI_PROVIDER", key="ai_provider")
+    take_str("ai_route_policy", "EASIFY_AI_ROUTE_POLICY", key="ai_route_policy")
+    take_str("secret_backend", "EASIFY_SECRET_BACKEND", key="secret_backend")
     take_str("openai_api_key", "EASIFY_OPENAI_API_KEY", "OPENAI_API_KEY", key="openai_api_key")
     take_str("openai_base_url", "EASIFY_OPENAI_BASE_URL", "OPENAI_BASE_URL", key="openai_base_url")
     take_str("openai_model", "EASIFY_OPENAI_MODEL", key="openai_model")
+    take_str(
+        "openai_compatible_api_key",
+        "EASIFY_OPENAI_COMPATIBLE_API_KEY",
+        "OPENAI_COMPATIBLE_API_KEY",
+        key="openai_compatible_api_key",
+    )
+    take_str(
+        "openai_compatible_base_url",
+        "EASIFY_OPENAI_COMPATIBLE_BASE_URL",
+        "OPENAI_COMPATIBLE_BASE_URL",
+        key="openai_compatible_base_url",
+    )
+    take_str("openai_compatible_model", "EASIFY_OPENAI_COMPATIBLE_MODEL", key="openai_compatible_model")
     take_str("anthropic_api_key", "EASIFY_ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY", key="anthropic_api_key")
     take_str("anthropic_model", "EASIFY_ANTHROPIC_MODEL", key="anthropic_model")
+    take_str("openrouter_api_key", "EASIFY_OPENROUTER_API_KEY", "OPENROUTER_API_KEY", key="openrouter_api_key")
+    take_str("openrouter_base_url", "EASIFY_OPENROUTER_BASE_URL", key="openrouter_base_url")
+    take_str("openrouter_model", "EASIFY_OPENROUTER_MODEL", key="openrouter_model")
+    take_str("litellm_api_key", "EASIFY_LITELLM_API_KEY", "LITELLM_API_KEY", key="litellm_api_key")
+    take_str("litellm_base_url", "EASIFY_LITELLM_BASE_URL", key="litellm_base_url")
+    take_str("litellm_model", "EASIFY_LITELLM_MODEL", key="litellm_model")
     take_bool("context_include_focused_app", "EASIFY_CONTEXT_FOCUSED_APP", key="context_include_focused_app")
     take_int(
         "context_buffer_words",

@@ -62,8 +62,18 @@ metrics = false
 
 # --- Phase 2 ---
 # ai_provider = "ollama"
+# ai_provider choices: "ollama", "openai-compatible", "openai", "anthropic", "openrouter", "litellm"
+# ai_route_policy choices: "private", "local", "offline", "fast", "best", "cheap", "code"
+# ai_route_policy = ""
+# secret_backend choices: "env" (default), "keyring", "keychain", "auto"
+# secret_backend = "env"
 # openai_model = "gpt-4o-mini"
+# openai_compatible_base_url = "http://127.0.0.1:8000/v1"
+# openai_compatible_model = "gpt-4o-mini"
 # anthropic_model = "claude-3-5-haiku-20241022"
+# openrouter_model = "openai/gpt-4o-mini"
+# litellm_base_url = "http://127.0.0.1:4000/v1"
+# litellm_model = "gpt-4o-mini"
 context_include_focused_app = true
 context_buffer_words = 8
 # expansion_preview = false

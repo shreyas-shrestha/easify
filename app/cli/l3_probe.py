@@ -8,6 +8,7 @@ from urllib.parse import urlparse, urlunparse
 
 import httpx
 
+from app.ai.registry import resolve_provider_selection
 from app.config.settings import Settings
 
 _GENERATE_SUFFIX = "/api/generate"
@@ -47,24 +48,35 @@ class L3ProbeOutcome:
 def probe_l3_backend(settings: Settings, *, httpx_timeout: float) -> L3ProbeOutcome:
     """Non-local checks only (keys, Ollama reachability + model list)."""
     out = L3ProbeOutcome()
-    prov = (settings.ai_provider or "ollama").strip().lower()
+    selection = resolve_provider_selection(settings)
+    prov = selection.provider_id
 
-    if prov in ("openai", "gpt"):
-        if not (settings.openai_api_key or "").strip():
+    if prov in ("openai", "openrouter"):
+        if selection.require_api_key and not selection.api_key:
             out.issues.append(
                 L3BackendIssue(
                     "fail",
-                    "OpenAI: EASIFY_OPENAI_API_KEY / OPENAI_API_KEY is empty",
+                    f"{selection.display_name}: API key is empty",
                 )
             )
         return out
 
-    if prov in ("anthropic", "claude"):
-        if not (settings.anthropic_api_key or "").strip():
+    if prov == "anthropic":
+        if not selection.api_key:
             out.issues.append(
                 L3BackendIssue(
                     "fail",
-                    "Anthropic: EASIFY_ANTHROPIC_API_KEY / ANTHROPIC_API_KEY is empty",
+                    "Anthropic: API key is empty",
+                )
+            )
+        return out
+
+    if prov in ("openai-compatible", "litellm"):
+        if not selection.base_url:
+            out.issues.append(
+                L3BackendIssue(
+                    "fail",
+                    f"{selection.display_name}: base URL is empty",
                 )
             )
         return out
