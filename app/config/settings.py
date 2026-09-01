@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Optional
 
 from app.config.toml_loader import merge_config_into_settings
+from app.secrets import lookup_secret
 
 
 def _env(name: str, default: str) -> str:
@@ -57,6 +58,8 @@ class Settings:
     )
 
     ai_provider: str = field(default_factory=lambda: _env("AI_PROVIDER", "ollama").lower().strip())
+    ai_route_policy: str = field(default_factory=lambda: _env("AI_ROUTE_POLICY", "").lower().strip())
+    secret_backend: str = field(default_factory=lambda: _env("SECRET_BACKEND", "env").lower().strip())
     openai_api_key: str = field(
         default_factory=lambda: os.environ.get("EASIFY_OPENAI_API_KEY")
         or os.environ.get("OPENAI_API_KEY", "")
@@ -66,11 +69,34 @@ class Settings:
         or os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1")
     )
     openai_model: str = field(default_factory=lambda: _env("OPENAI_MODEL", "gpt-4o-mini"))
+    openai_compatible_api_key: str = field(
+        default_factory=lambda: os.environ.get("EASIFY_OPENAI_COMPATIBLE_API_KEY")
+        or os.environ.get("OPENAI_COMPATIBLE_API_KEY", "")
+    )
+    openai_compatible_base_url: str = field(
+        default_factory=lambda: os.environ.get("EASIFY_OPENAI_COMPATIBLE_BASE_URL")
+        or os.environ.get("OPENAI_COMPATIBLE_BASE_URL", "")
+    )
+    openai_compatible_model: str = field(default_factory=lambda: _env("OPENAI_COMPATIBLE_MODEL", "gpt-4o-mini"))
     anthropic_api_key: str = field(
         default_factory=lambda: os.environ.get("EASIFY_ANTHROPIC_API_KEY")
         or os.environ.get("ANTHROPIC_API_KEY", "")
     )
     anthropic_model: str = field(default_factory=lambda: _env("ANTHROPIC_MODEL", "claude-3-5-haiku-20241022"))
+    openrouter_api_key: str = field(
+        default_factory=lambda: os.environ.get("EASIFY_OPENROUTER_API_KEY")
+        or os.environ.get("OPENROUTER_API_KEY", "")
+    )
+    openrouter_base_url: str = field(
+        default_factory=lambda: _env("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
+    )
+    openrouter_model: str = field(default_factory=lambda: _env("OPENROUTER_MODEL", "openai/gpt-4o-mini"))
+    litellm_api_key: str = field(
+        default_factory=lambda: os.environ.get("EASIFY_LITELLM_API_KEY")
+        or os.environ.get("LITELLM_API_KEY", "")
+    )
+    litellm_base_url: str = field(default_factory=lambda: _env("LITELLM_BASE_URL", ""))
+    litellm_model: str = field(default_factory=lambda: _env("LITELLM_MODEL", "gpt-4o-mini"))
 
     context_include_focused_app: bool = field(default_factory=lambda: _env_bool("CONTEXT_FOCUSED_APP", True))
     context_buffer_words: int = field(
@@ -241,6 +267,7 @@ class Settings:
                     pass
                 break
         merge_config_into_settings(self)
+        self._apply_secret_fallbacks()
         expansion_log_override = os.environ.get("EASIFY_EXPANSION_LOG_PATH")
         if expansion_log_override and str(expansion_log_override).strip():
             self.expansion_log_path = Path(os.path.expanduser(str(expansion_log_override).strip()))
@@ -255,6 +282,24 @@ class Settings:
             self.startup_health_check = False
         elif p in ("input_engine", "engine_v2"):
             self.engine_v2 = True
+
+    def _apply_secret_fallbacks(self) -> None:
+        fallback_map = {
+            "openai_api_key": ("openai_api_key", "OPENAI_API_KEY"),
+            "openai_compatible_api_key": (
+                "openai_compatible_api_key",
+                "OPENAI_COMPATIBLE_API_KEY",
+            ),
+            "anthropic_api_key": ("anthropic_api_key", "ANTHROPIC_API_KEY"),
+            "openrouter_api_key": ("openrouter_api_key", "OPENROUTER_API_KEY"),
+            "litellm_api_key": ("litellm_api_key", "LITELLM_API_KEY"),
+        }
+        for attr, names in fallback_map.items():
+            if getattr(self, attr, ""):
+                continue
+            value = lookup_secret(names, self.secret_backend)
+            if value:
+                setattr(self, attr, value)
 
     def user_snippets_path(self) -> Path:
         """Primary user-writable snippets file (for promotions and UI)."""

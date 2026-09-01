@@ -25,7 +25,7 @@ Easify sits between your keyboard and the apps you already use. It resolves simp
 4. **Fuzzy snippets** — Close matches when you slightly mistype a snippet key.
 5. **Semantic snippets** *(optional)* — Similar meaning when exact/fuzzy miss (`pip install easify[semantic]`).
 6. **Answer cache** — Reuses past AI answers for the same kind of prompt.
-7. **LLM** — **Ollama** (default), or **OpenAI** / **Anthropic** if you configure keys.
+7. **LLM router** — **Ollama** by default, plus OpenAI, Anthropic, OpenRouter, LiteLLM, or any OpenAI-compatible endpoint you configure.
 
 So many requests never hit the network, and repeated questions reuse the cache.
 
@@ -97,12 +97,40 @@ So many requests never hit the network, and repeated questions reuse the cache.
   |----------|----------------|
   | `EASIFY_TRIGGER` / `EASIFY_CAPTURE_CLOSE` | Delimiters (default `//`) |
   | `OLLAMA_URL` / `EASIFY_MODEL` / `OLLAMA_MODEL` | Ollama endpoint and model |
-  | `EASIFY_AI_PROVIDER` | `ollama` (default), `openai`, `anthropic` |
+  | `EASIFY_AI_PROVIDER` | `ollama` (default), `openai-compatible`, `openai`, `anthropic`, `openrouter`, `litellm` |
+  | `EASIFY_AI_ROUTE_POLICY` | Optional policy alias: `private`, `local`, `offline`, `fast`, `best`, `cheap`, `code` |
+  | `EASIFY_SECRET_BACKEND` | Optional API-key fallback: `env` (default), `keyring`, `keychain`, or `auto` |
   | `EASIFY_TRAY` | `0` to disable tray on headless servers |
   | `EASIFY_EXPANSION_PREVIEW` | `1` to confirm each expansion |
   | `EASIFY_PALETTE_HOTKEY` | Global hotkey for the palette |
 
 For the full list, see `app/config/settings.py`.
+
+### LLM providers
+
+Easify uses API keys and provider endpoints. It does not automate consumer web sessions for ChatGPT, Claude, or Cursor.
+
+- `ollama` — default local backend. Configure with `OLLAMA_URL` and `EASIFY_MODEL` / `OLLAMA_MODEL`.
+- `openai` — OpenAI API. Set `EASIFY_OPENAI_API_KEY` / `OPENAI_API_KEY` and optionally `EASIFY_OPENAI_MODEL`.
+- `anthropic` — Anthropic API. Set `EASIFY_ANTHROPIC_API_KEY` / `ANTHROPIC_API_KEY` and optionally `EASIFY_ANTHROPIC_MODEL`.
+- `openrouter` — OpenRouter's OpenAI-compatible API. Set `EASIFY_OPENROUTER_API_KEY` and optionally `EASIFY_OPENROUTER_MODEL`.
+- `litellm` — A local or hosted LiteLLM proxy. Configure `EASIFY_LITELLM_BASE_URL`, optional `EASIFY_LITELLM_API_KEY`, and `EASIFY_LITELLM_MODEL`.
+- `openai-compatible` — Any `/v1/chat/completions` compatible endpoint. Configure `EASIFY_OPENAI_COMPATIBLE_BASE_URL`, optional `EASIFY_OPENAI_COMPATIBLE_API_KEY`, and `EASIFY_OPENAI_COMPATIBLE_MODEL`.
+
+Routing policies are aliases over the same providers:
+
+- `private`, `local`, `offline` always use Ollama.
+- `fast` prefers OpenAI, then LiteLLM, then OpenAI-compatible, then Ollama.
+- `best` and `code` prefer Anthropic, then OpenAI, then OpenRouter, then Ollama.
+- `cheap` prefers LiteLLM, then OpenAI-compatible, then OpenRouter, then Ollama.
+
+For desktop installs, keep secrets out of TOML by using a secret backend. On macOS, install the optional `keyring` package and store the key in the system Keychain:
+
+```bash
+python3 -m pip install keyring
+keyring set easify OPENAI_API_KEY
+EASIFY_SECRET_BACKEND=keychain easify
+```
 
 ---
 

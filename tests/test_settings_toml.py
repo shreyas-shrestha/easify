@@ -16,6 +16,9 @@ def clear_toml_sensitive_env(monkeypatch: pytest.MonkeyPatch) -> None:
         "OLLAMA_EXPANDER_LIVE_AUTOCORRECT",
         "EASIFY_METRICS",
         "EASIFY_PHRASE_BUFFER_MAX",
+        "EASIFY_AI_ROUTE_POLICY",
+        "EASIFY_OPENROUTER_API_KEY",
+        "EASIFY_SECRET_BACKEND",
     ):
         monkeypatch.delenv(key, raising=False)
 
@@ -67,3 +70,32 @@ def test_metrics_batch_flush(tmp_path: Path) -> None:
     m.incr("x", 1)
     m.flush()
     assert mp.is_file()
+
+
+def test_provider_toml_merges_when_env_not_set(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, clear_toml_sensitive_env: None
+) -> None:
+    p = tmp_path / "cfg.toml"
+    p.write_text(
+        "ai_route_policy = \"cheap\"\n"
+        "openrouter_api_key = \"test-router-key\"\n"
+        "openrouter_model = \"openai/gpt-4o-mini\"\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("EASIFY_CONFIG", str(p))
+    s = Settings.load()
+    assert s.ai_route_policy == "cheap"
+    assert s.openrouter_api_key == "test-router-key"
+    assert s.openrouter_model == "openai/gpt-4o-mini"
+
+
+def test_secret_backend_fills_missing_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    import app.config.settings as settings_mod
+
+    monkeypatch.setenv("EASIFY_SECRET_BACKEND", "keychain")
+    monkeypatch.delenv("EASIFY_OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setattr(settings_mod, "lookup_secret", lambda names, backend: "from-secret")
+
+    s = Settings.load()
+    assert s.openai_api_key == "from-secret"

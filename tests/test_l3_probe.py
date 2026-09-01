@@ -35,6 +35,17 @@ def test_probe_openai_no_key(monkeypatch) -> None:
     assert out.issues[0].level == "fail"
 
 
+def test_probe_openrouter_no_key(monkeypatch) -> None:
+    monkeypatch.setenv("EASIFY_AI_PROVIDER", "openrouter")
+    monkeypatch.delenv("EASIFY_OPENROUTER_API_KEY", raising=False)
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    s = Settings.load()
+    out = probe_l3_backend(s, httpx_timeout=1.0)
+    assert len(out.issues) == 1
+    assert out.issues[0].level == "fail"
+    assert "OpenRouter" in out.issues[0].message
+
+
 def test_probe_ollama_ok(monkeypatch) -> None:
     monkeypatch.setenv("EASIFY_AI_PROVIDER", "ollama")
     monkeypatch.setenv("EASIFY_MODEL", "phi3")

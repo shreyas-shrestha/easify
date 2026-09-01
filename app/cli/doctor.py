@@ -8,6 +8,7 @@ import platform
 import sys
 from typing import Any, Dict, List, Literal, TypedDict
 
+from app.ai.registry import resolve_provider_selection
 from app.cli.l3_probe import probe_l3_backend
 from app.config.settings import Settings, _config_dir
 
@@ -66,8 +67,11 @@ def gather_doctor_report(settings: Settings) -> Dict[str, Any]:
     except OSError as e:
         fail("cache_writable", f"cannot write cache directory {cdb.parent}: {e}")
 
-    prov = (settings.ai_provider or "ollama").strip().lower()
+    selection = resolve_provider_selection(settings)
+    prov = selection.provider_id
     ok("ai_provider", prov)
+    if settings.ai_route_policy.strip():
+        ok("ai_route_policy", settings.ai_route_policy.strip().lower())
 
     outcome = probe_l3_backend(settings, httpx_timeout=10.0)
     l3_json = {
@@ -76,22 +80,22 @@ def gather_doctor_report(settings: Settings) -> Dict[str, Any]:
         "issues": [{"level": i.level, "message": i.message} for i in outcome.issues],
     }
 
-    if prov in ("openai", "gpt"):
+    if prov in ("openai", "openrouter", "openai-compatible", "litellm"):
         for issue in outcome.issues:
             if issue.level == "fail":
                 fail("l3_backend", issue.message)
             else:
                 warn("l3_backend", issue.message)
         if not outcome.issues:
-            ok("openai_key", "OpenAI: API key set")
-    elif prov in ("anthropic", "claude"):
+            ok("l3_backend", f"{selection.display_name}: configured")
+    elif prov == "anthropic":
         for issue in outcome.issues:
             if issue.level == "fail":
                 fail("l3_backend", issue.message)
             else:
                 warn("l3_backend", issue.message)
         if not outcome.issues:
-            ok("anthropic_key", "Anthropic: API key set")
+            ok("l3_backend", "Anthropic: API key set")
     else:
         for issue in outcome.issues:
             if issue.level == "fail":
@@ -163,6 +167,7 @@ def gather_doctor_report(settings: Settings) -> Dict[str, Any]:
         "python": sys.version.split()[0],
         "platform": platform.system(),
         "ai_provider": prov,
+        "ai_route_policy": settings.ai_route_policy.strip().lower(),
         "checks": checks,
         "l3_probe": l3_json,
         "summary": {"fail": fails, "warn": warns},

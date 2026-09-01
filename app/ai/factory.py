@@ -4,23 +4,27 @@ from __future__ import annotations
 
 from app.ai.chat_provider import AnthropicChatProvider, ChatProvider, OllamaChatProvider, OpenAIChatProvider
 from app.ai.ollama import OllamaClient
+from app.ai.registry import resolve_provider_selection
 from app.config.settings import Settings
 
 
 def build_chat_provider(settings: Settings) -> ChatProvider:
-    p = (settings.ai_provider or "ollama").strip().lower()
-    if p in ("openai", "gpt"):
+    selection = resolve_provider_selection(settings)
+    if selection.adapter == "openai-compatible":
         return OpenAIChatProvider(
-            api_key=settings.openai_api_key,
-            base_url=settings.openai_base_url,
-            model=settings.openai_model,
+            api_key=selection.api_key,
+            base_url=selection.base_url,
+            model=selection.model,
             timeout_s=settings.ollama_timeout_s,
             retries=settings.ollama_retries,
+            provider_name=selection.provider_id,
+            cache_prefix=selection.provider_id,
+            require_api_key=selection.require_api_key,
         )
-    if p in ("anthropic", "claude"):
+    if selection.adapter == "anthropic":
         return AnthropicChatProvider(
-            api_key=settings.anthropic_api_key,
-            model=settings.anthropic_model,
+            api_key=selection.api_key,
+            model=selection.model,
             timeout_s=settings.ollama_timeout_s,
             retries=settings.ollama_retries,
         )
