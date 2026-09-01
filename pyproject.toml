@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "easify"
 version = "0.6.5"
-description = "Cross-platform AI text expansion: layered snippets, autocorrect, cache, local Ollama"
+description = "Invoke an LLM anywhere you type with local-first AI text expansion"
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }

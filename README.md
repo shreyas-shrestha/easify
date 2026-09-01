@@ -1,10 +1,14 @@
 # Easify
 
-Easify is a way to supercharge your writing. Turn short phrases you type into full text, definitions, fixes, unit conversions, snippets, question answers all embedded into your keyboard everywhere you write. 
+Invoke an LLM anywhere you type.
+
+Easify is a local-first AI text expander for your keyboard. Type a short intent in any app and turn it into polished text, definitions, fixes, unit conversions, snippets, or direct answers without switching windows. It runs on Ollama by default and can use OpenAI or Anthropic when you configure API keys.
 
 ---
 
 ## What it does for you
+
+Easify sits between your keyboard and the apps you already use. It resolves simple requests locally first, reuses cached answers when it can, and only calls an LLM when the rest of the stack misses.
 
 ### Deliberate expansion (`//` by default)
 
@@ -23,7 +27,7 @@ Easify is a way to supercharge your writing. Turn short phrases you type into fu
 6. **Answer cache** — Reuses past AI answers for the same kind of prompt.
 7. **LLM** — **Ollama** (default), or **OpenAI** / **Anthropic** if you configure keys.
 
-So: many requests never hit the network; repeated questions reuse the cache.
+So many requests never hit the network, and repeated questions reuse the cache.
 
 ### While you type (live mode)
 
